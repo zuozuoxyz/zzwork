@@ -1,6 +1,7 @@
 import { ipcMain, IpcMainInvokeEvent } from 'electron'
 import type { IpcResult } from '../../renderer/types/errors'
 import { AppError } from '../../renderer/types/errors'
+import { registerAgentHandlers } from './agent.ipc'
 
 type IpcHandlerFn = (event: IpcMainInvokeEvent, ...args: any[]) => Promise<any>
 
@@ -38,4 +39,5 @@ export function registerAllIpcHandlers(): void {
   registerFileHandlers()
   registerSettingsHandlers()
   registerConversationHandlers()
+  registerAgentHandlers()
 }
