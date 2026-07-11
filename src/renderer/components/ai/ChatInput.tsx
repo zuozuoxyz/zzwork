@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect } from 'react'
-import { Input, Button, Tag } from 'antd'
+import { Input, Button, Tag, Select } from 'antd'
 import { SendOutlined, HighlightOutlined } from '@ant-design/icons'
 import { useConversationStore } from '../../stores/conversation.store'
 import { useProjectStore } from '../../stores/project.store'
+import type { ModelConfig } from '../../types/model'
 
 const { TextArea } = Input
 
@@ -16,13 +17,23 @@ export default function ChatInput(): JSX.Element {
   const [input, setInput] = useState('')
   const [capability, setCapability] = useState<string | undefined>()
   const [selectedText, setSelectedText] = useState<string | undefined>()
+  const [models, setModels] = useState<ModelConfig[]>([])
   const textAreaRef = useRef<any>(null)
 
   const sendMessage = useConversationStore((s) => s.sendMessage)
   const isStreaming = useConversationStore((s) => s.isStreaming)
+  const currentModelId = useConversationStore((s) => s.currentModelId)
+  const setModelId = useConversationStore((s) => s.setModelId)
   const currentProjectId = useProjectStore((s) => s.currentProjectId)
   const projects = useProjectStore((s) => s.projects)
   const currentProject = projects.find((p) => p.id === currentProjectId)
+
+  // Load models for the selector
+  useEffect(() => {
+    window.api.model.list().then((r) => {
+      if (r.ok) setModels(r.data)
+    })
+  }, [])
 
   // Listen for text selection in editor
   useEffect(() => {
@@ -70,6 +81,19 @@ export default function ChatInput(): JSX.Element {
       borderTop: '1px solid #3e3e3e',
       backgroundColor: '#1e1e1e',
     }}>
+      {/* Model selector */}
+      <Select
+        value={currentModelId || undefined}
+        onChange={setModelId}
+        size="small"
+        style={{ width: 180, marginBottom: 8 }}
+        options={models.map((m) => ({
+          value: m.id,
+          label: `${m.isDefault ? '● ' : ''}${m.name}`,
+        }))}
+        placeholder="选择模型"
+      />
+
       {/* Capability tags */}
       <div style={{ display: 'flex', gap: 4, marginBottom: 8, flexWrap: 'wrap' }}>
         {CAPABILITIES.map((c) => (

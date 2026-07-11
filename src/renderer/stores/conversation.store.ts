@@ -20,6 +20,8 @@ interface ConversationStore {
   isStreaming: boolean
   thinkingSteps: ThinkingStep[]
   streamingText: string
+  currentModelId: string | null
+  setModelId: (id: string) => void
 
   loadByProject: (projectId: string) => Promise<void>
   createConversation: (projectId: string) => Promise<void>
@@ -40,6 +42,8 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
   isStreaming: false,
   thinkingSteps: [],
   streamingText: '',
+  currentModelId: null,
+  setModelId: (id) => set({ currentModelId: id }),
 
   loadByProject: async (projectId) => {
     const result = await window.api.conversation.list(projectId)
@@ -132,19 +136,24 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
         content: m.content,
       }))
 
-    // Get default model ID
-    const modelResult = await window.api.model.list()
-    let modelId = ''
-    if (modelResult.ok && modelResult.data.length > 0) {
-      const defaultModel = modelResult.data.find((m) => m.isDefault) ?? modelResult.data[0]
-      modelId = defaultModel.id
+    // Resolve model ID: use stored currentModelId, or auto-load default
+    let modelId = get().currentModelId
+    if (!modelId) {
+      const modelResult = await window.api.model.list()
+      if (modelResult.ok && modelResult.data.length > 0) {
+        const defaultModel = modelResult.data.find((m) => m.isDefault) ?? modelResult.data[0]
+        if (defaultModel) {
+          modelId = defaultModel.id
+          set({ currentModelId: modelId })
+        }
+      }
     }
 
     // Start agent
     await window.api.agent.run({
       projectId,
       conversationId: convId!,
-      modelId,
+      modelId: modelId || '',
       message: content,
       capability: capability as 'default' | 'analyze' | 'report' | 'review' | 'decompose' | undefined,
       context: selectedText ? { selectedText } : undefined,
