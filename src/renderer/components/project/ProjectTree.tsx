@@ -1,11 +1,14 @@
 import { useEffect, useState } from 'react'
-import { Tree, Dropdown, message } from 'antd'
+import { Tree, Dropdown, Input, message } from 'antd'
 import {
   FolderOutlined,
   FolderOpenOutlined,
   PlusOutlined,
   DeleteOutlined,
   InboxOutlined,
+  AppstoreAddOutlined,
+  FileAddOutlined,
+  FolderAddOutlined,
 } from '@ant-design/icons'
 import type { MenuProps } from 'antd'
 import { useProjectStore } from '../../stores/project.store'
@@ -13,34 +16,77 @@ import { useProgressStore } from '../../stores/progress.store'
 import ProjectCreateModal from './ProjectCreateModal'
 
 export default function ProjectTree(): JSX.Element {
-  const { projects, currentProjectId, loadProjects, setCurrentProject, deleteProject } =
+  const { projects, groups, currentProjectId, loadProjects, loadGroups, setCurrentProject, deleteProject, createGroup, deleteGroup } =
     useProjectStore()
   const loadByProject = useProgressStore((s) => s.loadByProject)
   const [modalOpen, setModalOpen] = useState(false)
+  const [addingGroup, setAddingGroup] = useState(false)
+  const [groupName, setGroupName] = useState('')
 
   useEffect(() => {
     loadProjects()
-  }, [loadProjects])
+    loadGroups()
+  }, [loadProjects, loadGroups])
 
   const handleSelect = (selectedKeys: React.Key[]) => {
     const id = selectedKeys[0] as string | undefined
-    if (id) {
+    if (id && !id.startsWith('group-')) {
       setCurrentProject(id)
       loadByProject(id)
     }
   }
 
-  const contextMenuItems: MenuProps['items'] = [
-    { key: 'delete', label: '删除项目', icon: <DeleteOutlined />, danger: true },
-  ]
+  const handleAddGroup = async () => {
+    const name = groupName.trim()
+    if (!name) return
+    await createGroup({ name })
+    setGroupName('')
+    setAddingGroup(false)
+  }
 
-  const treeData = projects
-    .filter((p) => p.status === 'active')
-    .map((p) => ({
+  // Build tree: groups contain projects
+  const treeData: any[] = []
+
+  // Groups with their projects
+  for (const group of groups) {
+    const groupProjects = projects.filter((p) => p.groupId === group.id && p.status !== 'archived')
+    treeData.push({
+      key: `group-${group.id}`,
+      title: (
+        <Dropdown menu={{
+          items: [
+            { key: 'delete', label: '删除组', icon: <DeleteOutlined />, danger: true },
+          ],
+          onClick: async ({ key }) => {
+            if (key === 'delete') {
+              await deleteGroup(group.id)
+              message.success(`已删除组 "${group.name}"`)
+            }
+          }
+        }} trigger={['contextMenu']}>
+          <span style={{ fontSize: 12, fontWeight: 600, color: '#888' }}>{group.name}</span>
+        </Dropdown>
+      ),
+      icon: <FolderOutlined style={{ color: '#6a9ecd' }} />,
+      selectable: false,
+      children: groupProjects.map((p) => projectToNode(p)),
+    })
+  }
+
+  // Ungrouped projects
+  const ungrouped = projects.filter((p) => !p.groupId && p.status !== 'archived')
+  for (const p of ungrouped) {
+    treeData.push(projectToNode(p))
+  }
+
+  function projectToNode(p: typeof projects[0]) {
+    return {
       key: p.id,
       title: (
         <Dropdown menu={{
-          items: contextMenuItems,
+          items: [
+            { key: 'delete', label: '删除项目', icon: <DeleteOutlined />, danger: true },
+          ],
           onClick: async ({ key }) => {
             if (key === 'delete') {
               await deleteProject(p.id)
@@ -55,7 +101,10 @@ export default function ProjectTree(): JSX.Element {
         ? <FolderOpenOutlined style={{ color: '#dcb67a' }} />
         : <FolderOutlined style={{ color: '#dcb67a' }} />,
       isLeaf: true,
-    }))
+    }
+  }
+
+  const isEmpty = treeData.length === 0
 
   return (
     <div style={{ padding: '8px 0' }}>
@@ -74,13 +123,35 @@ export default function ProjectTree(): JSX.Element {
         }}>
           项目
         </span>
-        <PlusOutlined
-          style={{ cursor: 'pointer', color: '#999', fontSize: 14 }}
-          onClick={() => setModalOpen(true)}
-        />
+        <div style={{ display: 'flex', gap: 4 }}>
+          <AppstoreAddOutlined
+            style={{ cursor: 'pointer', color: '#999', fontSize: 14 }}
+            onClick={() => setAddingGroup(!addingGroup)}
+            title="添加组"
+          />
+          <PlusOutlined
+            style={{ cursor: 'pointer', color: '#999', fontSize: 14 }}
+            onClick={() => setModalOpen(true)}
+            title="添加项目"
+          />
+        </div>
       </div>
 
-      {treeData.length === 0 ? (
+      {/* Add group input */}
+      {addingGroup && (
+        <div style={{ padding: '0 12px 8px', display: 'flex', gap: 4 }}>
+          <Input
+            size="small"
+            placeholder="组名称"
+            value={groupName}
+            onChange={(e) => setGroupName(e.target.value)}
+            onPressEnter={handleAddGroup}
+            autoFocus
+          />
+        </div>
+      )}
+
+      {isEmpty ? (
         <div style={{
           padding: '16px 12px',
           color: '#666',
@@ -97,6 +168,7 @@ export default function ProjectTree(): JSX.Element {
           selectedKeys={currentProjectId ? [currentProjectId] : []}
           onSelect={handleSelect}
           blockNode
+          defaultExpandAll
           style={{ padding: '0 4px' }}
         />
       )}

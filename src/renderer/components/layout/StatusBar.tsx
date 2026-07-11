@@ -3,6 +3,7 @@ import { SettingOutlined } from '@ant-design/icons'
 import { useProjectStore } from '../../stores/project.store'
 import { useProgressStore } from '../../stores/progress.store'
 import { useEditorStore } from '../../stores/editor.store'
+import { useUIStore } from '../../stores/ui.store'
 
 function formatTime(): string {
   return new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
@@ -51,6 +52,11 @@ export default function StatusBar({ onSettingsClick }: Props): JSX.Element {
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
         {activeTabId && <span>📝 编辑中</span>}
+        <span
+          style={{ cursor: 'pointer', opacity: 0.7, fontSize: 14 }}
+          onClick={() => useUIStore.getState().toggleAIPanel()}
+          title="AI 助手"
+        >🤖</span>
         <SettingOutlined
           style={{ cursor: 'pointer', opacity: 0.7 }}
           onClick={onSettingsClick}

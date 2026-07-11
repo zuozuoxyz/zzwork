@@ -1,6 +1,11 @@
 import { ipcMain, IpcMainInvokeEvent } from 'electron'
 import type { IpcResult } from '../../renderer/types/errors'
 import { AppError } from '../../renderer/types/errors'
+import { registerProjectHandlers } from './project.ipc'
+import { registerProgressHandlers } from './progress.ipc'
+import { registerFileHandlers } from './file.ipc'
+import { registerSettingsHandlers } from './settings.ipc'
+import { registerConversationHandlers } from './conversation.ipc'
 import { registerAgentHandlers } from './agent.ipc'
 import { registerModelHandlers } from './model.ipc'
 
@@ -28,13 +33,6 @@ export function wrapHandler(fn: IpcHandlerFn): IpcHandlerFn {
 }
 
 export function registerAllIpcHandlers(): void {
-  // Import and register each domain's handlers
-  const { registerProjectHandlers } = require('./project.ipc')
-  const { registerProgressHandlers } = require('./progress.ipc')
-  const { registerFileHandlers } = require('./file.ipc')
-  const { registerSettingsHandlers } = require('./settings.ipc')
-  const { registerConversationHandlers } = require('./conversation.ipc')
-
   registerProjectHandlers()
   registerProgressHandlers()
   registerFileHandlers()
