@@ -8,7 +8,7 @@ import StatusBar from './components/layout/StatusBar'
 import AIPanel from './components/layout/AIPanel'
 import ProjectTree from './components/project/ProjectTree'
 import FileTree from './components/project/FileTree'
-import ProgressPanel from './components/progress/ProgressPanel'
+import ProjectInfo from './components/project/ProjectInfo'
 import EditorTabs from './components/editor/EditorTabs'
 import MonacoEditorWrapper from './components/editor/MonacoEditor'
 import SettingsModal from './components/settings/SettingsModal'
@@ -21,9 +21,9 @@ export default function App(): JSX.Element {
       <AppShell
         projectTree={<ProjectTree />}
         fileTree={<FileTree />}
-        progressPanel={<ProgressPanel />}
+        progressPanel={<></>}
         editorTabs={<EditorTabs />}
-        editor={<MonacoEditorWrapper />}
+        editor={<><ProjectInfo /><MonacoEditorWrapper /></>}
         aiPanel={<AIPanel />}
         statusBar={<StatusBar onSettingsClick={() => setSettingsOpen(true)} />}
       />
