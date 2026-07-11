@@ -65,6 +65,7 @@ export interface AgentErrorData {
 export interface AgentRunParams {
   projectId: string
   conversationId: string
+  modelId: string
   message: string
   capability?: 'default' | 'analyze' | 'report' | 'review' | 'decompose'
   context?: ChatContext

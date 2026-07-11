@@ -3,7 +3,7 @@ import type { ChatCompletionMessageParam, ChatCompletionTool } from 'openai/reso
 import { getModelKey } from '../secrets.service'
 import type { ModelConfig } from '../../../renderer/types/model'
 import { AppError } from '../../../renderer/types/errors'
-import type { AIBackend, AgentEventCallback } from './backend.interface'
+import type { AIBackend, AgentEventCallback, ChatResponse, ToolUseBlock } from './backend.interface'
 import type { Tool } from '@anthropic-ai/sdk/resources/messages/messages'
 
 export class OpenAICompatibleBackend implements AIBackend {
@@ -14,7 +14,7 @@ export class OpenAICompatibleBackend implements AIBackend {
     tools: any[],
     systemPrompt: string,
     onEvent: AgentEventCallback
-  ): Promise<string> {
+  ): Promise<ChatResponse> {
     const apiKey = await getModelKey(this.model.id)
     if (!apiKey) throw new AppError('AI_API_KEY_MISSING', `模型 "${this.model.name}" 未配置 API Key`)
 
@@ -59,7 +59,9 @@ export class OpenAICompatibleBackend implements AIBackend {
     const choice = response.choices[0]
     const msg = choice.message
 
-    // Emit tool calls
+    const toolUses: ToolUseBlock[] = []
+
+    // Extract tool calls
     if (msg.tool_calls) {
       for (const tc of msg.tool_calls) {
         if (tc.type !== 'function') continue
@@ -68,6 +70,8 @@ export class OpenAICompatibleBackend implements AIBackend {
         try {
           input = JSON.parse(tc.function.arguments)
         } catch { /* ignore parse errors */ }
+
+        toolUses.push({ id: tc.id, name: tc.function.name, input })
 
         onEvent({
           type: 'tool_call',
@@ -78,6 +82,6 @@ export class OpenAICompatibleBackend implements AIBackend {
       }
     }
 
-    return msg.content || ''
+    return { text: msg.content || '', toolUses }
   }
 }

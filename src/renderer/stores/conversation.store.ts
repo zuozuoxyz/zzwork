@@ -132,10 +132,19 @@ export const useConversationStore = create<ConversationStore>((set, get) => ({
         content: m.content,
       }))
 
+    // Get default model ID
+    const modelResult = await window.api.model.list()
+    let modelId = ''
+    if (modelResult.ok && modelResult.data.length > 0) {
+      const defaultModel = modelResult.data.find((m) => m.isDefault) ?? modelResult.data[0]
+      modelId = defaultModel.id
+    }
+
     // Start agent
     await window.api.agent.run({
       projectId,
       conversationId: convId!,
+      modelId,
       message: content,
       capability: capability as 'default' | 'analyze' | 'report' | 'review' | 'decompose' | undefined,
       context: selectedText ? { selectedText } : undefined,

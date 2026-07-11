@@ -14,11 +14,22 @@ export interface AgentEvent {
 
 export type AgentEventCallback = (event: AgentEvent) => void
 
+export interface ToolUseBlock {
+  id: string
+  name: string
+  input: Record<string, unknown>
+}
+
+export interface ChatResponse {
+  text: string
+  toolUses: ToolUseBlock[]
+}
+
 export interface AIBackend {
   chat(
     messages: MessageParam[],
     tools: Tool[],
     systemPrompt: string,
     onEvent: AgentEventCallback
-  ): Promise<string>
+  ): Promise<ChatResponse>
 }
