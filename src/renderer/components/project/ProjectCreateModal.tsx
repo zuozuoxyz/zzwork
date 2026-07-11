@@ -7,9 +7,10 @@ const { TextArea } = Input
 interface Props {
   open: boolean
   onClose: () => void
+  preselectedGroupId?: string | null
 }
 
-export default function ProjectCreateModal({ open, onClose }: Props): JSX.Element {
+export default function ProjectCreateModal({ open, onClose, preselectedGroupId }: Props): JSX.Element {
   const [name, setName] = useState('')
   const [groupId, setGroupId] = useState<string | null>(null)
   const [description, setDescription] = useState('')
@@ -22,8 +23,11 @@ export default function ProjectCreateModal({ open, onClose }: Props): JSX.Elemen
   const loadGroups = useProjectStore((s) => s.loadGroups)
 
   useEffect(() => {
-    if (open) loadGroups()
-  }, [open, loadGroups])
+    if (open) {
+      loadGroups()
+      if (preselectedGroupId) setGroupId(preselectedGroupId)
+    }
+  }, [open, loadGroups, preselectedGroupId])
 
   const handleOk = async () => {
     const trimmed = name.trim()

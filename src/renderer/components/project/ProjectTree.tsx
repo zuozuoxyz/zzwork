@@ -20,6 +20,7 @@ export default function ProjectTree(): JSX.Element {
     useProjectStore()
   const loadByProject = useProgressStore((s) => s.loadByProject)
   const [modalOpen, setModalOpen] = useState(false)
+  const [preselectedGroupId, setPreselectedGroupId] = useState<string | null>(null)
   const [addingGroup, setAddingGroup] = useState(false)
   const [groupName, setGroupName] = useState('')
 
@@ -55,9 +56,15 @@ export default function ProjectTree(): JSX.Element {
       title: (
         <Dropdown menu={{
           items: [
+            { key: 'add', label: '添加项目到此组', icon: <PlusOutlined /> },
+            { type: 'divider' as const },
             { key: 'delete', label: '删除组', icon: <DeleteOutlined />, danger: true },
           ],
           onClick: async ({ key }) => {
+            if (key === 'add') {
+              setPreselectedGroupId(group.id)
+              setModalOpen(true)
+            }
             if (key === 'delete') {
               await deleteGroup(group.id)
               message.success(`已删除组 "${group.name}"`)
@@ -159,7 +166,7 @@ export default function ProjectTree(): JSX.Element {
           textAlign: 'center',
         }}>
           <InboxOutlined style={{ fontSize: 20, marginBottom: 8, display: 'block' }} />
-          暂无项目，点击 + 创建
+          点击 <AppstoreAddOutlined /> 创建组，再右键组添加项目
         </div>
       ) : (
         <Tree
@@ -175,7 +182,8 @@ export default function ProjectTree(): JSX.Element {
 
       <ProjectCreateModal
         open={modalOpen}
-        onClose={() => setModalOpen(false)}
+        onClose={() => { setModalOpen(false); setPreselectedGroupId(null) }}
+        preselectedGroupId={preselectedGroupId}
       />
     </div>
   )
