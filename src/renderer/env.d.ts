@@ -37,6 +37,23 @@ interface WindowApi {
     set: (key: string, value: string) => Promise<IpcResult<void>>
     getAll: () => Promise<IpcResult<Record<string, string>>>
   }
+  agent: {
+    run: (params: import('./types/conversation').AgentRunParams) => Promise<IpcResult<void>>
+    onStart: (cb: (data: import('./types/conversation').AgentStartData) => void) => void
+    onChunk: (cb: (data: import('./types/conversation').AgentChunkData) => void) => void
+    onToolCall: (cb: (data: import('./types/conversation').AgentToolCallData) => void) => void
+    onToolResult: (cb: (data: import('./types/conversation').AgentToolResultData) => void) => void
+    onDone: (cb: (data: import('./types/conversation').AgentDoneData) => void) => void
+    onError: (cb: (data: import('./types/conversation').AgentErrorData) => void) => void
+    removeAll: () => void
+  }
+  conversation: {
+    list: (projectId: string) => Promise<IpcResult<import('./types/conversation').Conversation[]>>
+    get: (id: string) => Promise<IpcResult<import('./types/conversation').Conversation | null>>
+    create: (projectId: string) => Promise<IpcResult<import('./types/conversation').Conversation>>
+    append: (convId: string, message: import('./types/conversation').ConversationMessage) => Promise<IpcResult<void>>
+    delete: (id: string) => Promise<IpcResult<void>>
+  }
 }
 
 declare global {
