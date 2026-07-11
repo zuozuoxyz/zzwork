@@ -28,17 +28,15 @@ export function getConnection(): Database.Database {
   return db
 }
 
-function runMigrations(db: Database.Database): void {
-  const migrationPath = join(__dirname, '../db/migrations/001-init.sql')
-  // In production, __dirname points to out/main; in dev with electron-vite, resolve accordingly
-  const migrationPaths = [
-    migrationPath,
-    join(__dirname, '../../main/db/migrations/001-init.sql'),
-    join(__dirname, '../../../src/main/db/migrations/001-init.sql'),
+function runSqlFile(db: Database.Database, fileName: string): void {
+  const paths = [
+    join(__dirname, `../db/migrations/${fileName}`),
+    join(__dirname, `../../main/db/migrations/${fileName}`),
+    join(__dirname, `../../../src/main/db/migrations/${fileName}`),
   ]
 
   let sql: string | null = null
-  for (const p of migrationPaths) {
+  for (const p of paths) {
     if (existsSync(p)) {
       sql = readFileSync(p, 'utf-8')
       break
@@ -46,10 +44,15 @@ function runMigrations(db: Database.Database): void {
   }
 
   if (!sql) {
-    throw new Error('Migration file 001-init.sql not found')
+    throw new Error(`Migration file ${fileName} not found`)
   }
 
   db.exec(sql)
+}
+
+function runMigrations(db: Database.Database): void {
+  runSqlFile(db, '001-init.sql')
+  runSqlFile(db, '002-models.sql')
 }
 
 export function closeConnection(): void {
