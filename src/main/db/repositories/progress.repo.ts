@@ -37,7 +37,7 @@ export class ProgressRepo {
   listByProject(projectId: string): ProgressItem[] {
     const db = getConnection()
     const rows = db.prepare(
-      'SELECT * FROM progress WHERE project_id = ? ORDER BY created_at ASC'
+      'SELECT * FROM progress WHERE project_id = ? ORDER BY updated_at ASC'
     ).all(projectId) as ProgressRow[]
     return rows.map(rowToItem)
   }
@@ -105,6 +105,20 @@ export class ProgressRepo {
       throw new AppError('PROJECT_NOT_FOUND', '进度条目不存在')
     }
     db.prepare('DELETE FROM progress WHERE id = ?').run(id)
+  }
+
+  reorder(projectId: string, itemIds: string[]): void {
+    const db = getConnection()
+    const updateStmt = db.prepare(
+      'UPDATE progress SET updated_at = ? WHERE id = ? AND project_id = ?'
+    )
+    const now = Date.now()
+    const tx = db.transaction(() => {
+      itemIds.forEach((id, index) => {
+        updateStmt.run(new Date(now + index).toISOString(), id, projectId)
+      })
+    })
+    tx()
   }
 }
 

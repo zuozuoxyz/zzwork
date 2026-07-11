@@ -6,8 +6,8 @@ interface UIStore {
   aiPanelVisible: boolean
   theme: 'vs-dark' | 'light'
 
-  resizeSidebar: (width: number) => void
-  resizeAIPanel: (width: number) => void
+  resizeSidebar: (delta: number) => void
+  resizeAIPanel: (delta: number) => void
   toggleAIPanel: () => void
   setTheme: (theme: 'vs-dark' | 'light') => void
 }
@@ -17,20 +17,22 @@ const SIDEBAR_MAX = 400
 const AI_PANEL_MIN = 250
 const AI_PANEL_MAX = 500
 
-export const useUIStore = create<UIStore>((set) => ({
+export const useUIStore = create<UIStore>((set, get) => ({
   sidebarWidth: parseInt(localStorage.getItem('sidebarWidth') || '280', 10),
   aiPanelWidth: parseInt(localStorage.getItem('aiPanelWidth') || '350', 10),
   aiPanelVisible: localStorage.getItem('aiPanelVisible') !== 'false',
   theme: 'vs-dark',
 
-  resizeSidebar: (width) => {
-    const clamped = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, width))
+  resizeSidebar: (delta) => {
+    const currentWidth = get().sidebarWidth
+    const clamped = Math.min(SIDEBAR_MAX, Math.max(SIDEBAR_MIN, currentWidth + delta))
     localStorage.setItem('sidebarWidth', String(clamped))
     set({ sidebarWidth: clamped })
   },
 
-  resizeAIPanel: (width) => {
-    const clamped = Math.min(AI_PANEL_MAX, Math.max(AI_PANEL_MIN, width))
+  resizeAIPanel: (delta) => {
+    const currentWidth = get().aiPanelWidth
+    const clamped = Math.min(AI_PANEL_MAX, Math.max(AI_PANEL_MIN, currentWidth + delta))
     localStorage.setItem('aiPanelWidth', String(clamped))
     set({ aiPanelWidth: clamped })
   },

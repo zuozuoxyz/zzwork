@@ -4,8 +4,11 @@ import { useEditorStore } from '../../stores/editor.store'
 import type { editor } from 'monaco-editor'
 
 export default function MonacoEditorWrapper(): JSX.Element {
-  const { fileContent, setFileContent, markDirty, activeTabId, openTabs } = useEditorStore()
-  const activeTab = openTabs.find((t) => t.id === activeTabId)
+  const fileContent = useEditorStore((s) => s.fileContent)
+  const setFileContent = useEditorStore((s) => s.setFileContent)
+  const markDirty = useEditorStore((s) => s.markDirty)
+  const activeTabId = useEditorStore((s) => s.activeTabId)
+  const activeTab = useEditorStore((s) => s.openTabs.find((t) => t.id === s.activeTabId))
 
   const handleChange: OnChange = useCallback((value) => {
     if (value !== undefined) {

@@ -53,7 +53,7 @@ export default function ProgressFormModal(props: Props): JSX.Element {
         setEstimatedHours(null)
       }
     }
-  }, [props.open])
+  }, [props.open, isEdit ? (props as EditProps).initialData?.id : null])
 
   const handleOk = async () => {
     const trimmed = title.trim()

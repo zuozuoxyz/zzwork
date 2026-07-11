@@ -1,6 +1,11 @@
+import { useState, useEffect } from 'react'
 import { useProjectStore } from '../../stores/project.store'
 import { useProgressStore } from '../../stores/progress.store'
 import { useEditorStore } from '../../stores/editor.store'
+
+function formatTime(): string {
+  return new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+}
 
 export default function StatusBar(): JSX.Element {
   const currentProjectId = useProjectStore((s) => s.currentProjectId)
@@ -11,7 +16,12 @@ export default function StatusBar(): JSX.Element {
   const currentProject = projects.find((p) => p.id === currentProjectId)
   const doneCount = items.filter((i) => i.status === 'done').length
   const progressPct = items.length > 0 ? Math.round((doneCount / items.length) * 100) : 0
-  const now = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+
+  const [now, setNow] = useState(formatTime)
+  useEffect(() => {
+    const timer = setInterval(() => setNow(formatTime()), 1000)
+    return () => clearInterval(timer)
+  }, [])
 
   return (
     <div style={{

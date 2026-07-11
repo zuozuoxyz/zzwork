@@ -20,4 +20,8 @@ export function registerProgressHandlers(): void {
   ipcMain.handle(IPC_CHANNELS.PROGRESS_DELETE, wrapHandler(async (_event, id: string) => {
     return progressRepo.delete(id)
   }))
+
+  ipcMain.handle(IPC_CHANNELS.PROGRESS_REORDER, wrapHandler(async (_event, params: { projectId: string; itemIds: string[] }) => {
+    return progressRepo.reorder(params.projectId, params.itemIds)
+  }))
 }
