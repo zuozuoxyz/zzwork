@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { ConfigProvider } from 'antd'
 import { antdTheme } from './styles/theme'
 import './styles/global.css'
@@ -9,8 +10,11 @@ import ProjectTree from './components/project/ProjectTree'
 import ProgressPanel from './components/progress/ProgressPanel'
 import EditorTabs from './components/editor/EditorTabs'
 import MonacoEditorWrapper from './components/editor/MonacoEditor'
+import SettingsModal from './components/settings/SettingsModal'
 
 export default function App(): JSX.Element {
+  const [settingsOpen, setSettingsOpen] = useState(false)
+
   return (
     <ConfigProvider theme={antdTheme}>
       <AppShell
@@ -19,8 +23,9 @@ export default function App(): JSX.Element {
         editorTabs={<EditorTabs />}
         editor={<MonacoEditorWrapper />}
         aiPanel={<AIPanel />}
-        statusBar={<StatusBar />}
+        statusBar={<StatusBar onSettingsClick={() => setSettingsOpen(true)} />}
       />
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </ConfigProvider>
   )
 }

@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { SettingOutlined } from '@ant-design/icons'
 import { useProjectStore } from '../../stores/project.store'
 import { useProgressStore } from '../../stores/progress.store'
 import { useEditorStore } from '../../stores/editor.store'
@@ -7,7 +8,11 @@ function formatTime(): string {
   return new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
 }
 
-export default function StatusBar(): JSX.Element {
+interface Props {
+  onSettingsClick?: () => void
+}
+
+export default function StatusBar({ onSettingsClick }: Props): JSX.Element {
   const currentProjectId = useProjectStore((s) => s.currentProjectId)
   const projects = useProjectStore((s) => s.projects)
   const items = useProgressStore((s) => s.items)
@@ -46,6 +51,10 @@ export default function StatusBar(): JSX.Element {
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
         {activeTabId && <span>📝 编辑中</span>}
+        <SettingOutlined
+          style={{ cursor: 'pointer', opacity: 0.7 }}
+          onClick={onSettingsClick}
+        />
         <span>{now}</span>
       </div>
     </div>
