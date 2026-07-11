@@ -2,33 +2,34 @@ import keytar from 'keytar'
 import { settingsRepo } from '../db/repositories/settings.repo'
 
 const SERVICE_NAME = 'zzwork'
-const ACCOUNT_NAME = 'anthropic-api-key'
+const KEY_PREFIX = 'model:'
 
-export async function getApiKey(): Promise<string | null> {
+function keyName(modelId: string): string {
+  return `${KEY_PREFIX}${modelId}`
+}
+
+export async function getModelKey(modelId: string): Promise<string | null> {
   try {
-    const key = await keytar.getPassword(SERVICE_NAME, ACCOUNT_NAME)
+    const key = await keytar.getPassword(SERVICE_NAME, keyName(modelId))
     if (key) return key
   } catch { /* keytar unavailable */ }
-
-  // Fallback: read from SQLite (less secure but works everywhere)
-  const fallback = settingsRepo.get('anthropic_api_key_fallback')
+  // SQLite fallback (encrypted at rest by app in future Phase)
+  const fallback = settingsRepo.get(`model_key_${modelId}`)
   return fallback || null
 }
 
-export async function setApiKey(key: string): Promise<void> {
+export async function setModelKey(modelId: string, key: string): Promise<void> {
   try {
-    await keytar.setPassword(SERVICE_NAME, ACCOUNT_NAME, key)
+    await keytar.setPassword(SERVICE_NAME, keyName(modelId), key)
   } catch {
-    // Fallback: store in SQLite when keychain is unavailable
-    settingsRepo.set('anthropic_api_key_fallback', key)
-    return
+    // Fallback to SQLite when keychain unavailable
+    settingsRepo.set(`model_key_${modelId}`, key)
   }
 }
 
-export async function deleteApiKey(): Promise<void> {
+export async function deleteModelKey(modelId: string): Promise<void> {
   try {
-    await keytar.deletePassword(SERVICE_NAME, ACCOUNT_NAME)
-  } catch {
-    // ignore
-  }
+    await keytar.deletePassword(SERVICE_NAME, keyName(modelId))
+  } catch { /* ignore */ }
+  settingsRepo.set(`model_key_${modelId}`, '')
 }

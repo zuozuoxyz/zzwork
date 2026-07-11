@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { MessageParam, Tool } from '@anthropic-ai/sdk/resources/messages/messages'
-import { getApiKey } from './secrets.service'
+import { getModelKey } from './secrets.service'
+import { modelRepo } from '../db/repositories/model.repo'
 import { AGENT_TOOLS, type ToolDefinition } from './agent-tools'
 import { buildSystemPrompt } from './prompts'
 import { AppError } from '../../renderer/types/errors'
@@ -38,10 +39,15 @@ function summarizeToolResult(tool: string, result: string): string {
 export async function runAgent(params: AgentRunParams, onEvent: AgentEventCallback): Promise<void> {
   const { projectId, conversationId, projectName, message, capability, context, history } = params
 
-  // 1. Read API Key
-  const apiKey = await getApiKey()
+  // 1. Read API Key from the default model
+  const defaultModel = modelRepo.getDefault()
+  if (!defaultModel) {
+    onEvent({ type: 'error', conversationId, code: 'AI_NO_MODEL', message: '请先在设置中添加模型' })
+    return
+  }
+  const apiKey = await getModelKey(defaultModel.id)
   if (!apiKey) {
-    onEvent({ type: 'error', conversationId, code: 'AI_API_KEY_MISSING', message: '请先在设置中配置 Anthropic API Key' })
+    onEvent({ type: 'error', conversationId, code: 'AI_API_KEY_MISSING', message: `请先在设置中配置 ${defaultModel.name} 的 API Key` })
     return
   }
 
