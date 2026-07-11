@@ -2,6 +2,8 @@ import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
 import { registerAllIpcHandlers } from './ipc'
+import { getConnection } from './db/connection'
+import { modelRepo } from './db/repositories/model.repo'
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -37,6 +39,8 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  getConnection() // ensure DB + migrations run
+  modelRepo.seedIfEmpty()
   registerAllIpcHandlers()
   createWindow()
 
