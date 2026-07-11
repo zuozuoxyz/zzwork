@@ -1,5 +1,6 @@
 import type { Project, CreateProjectDTO, UpdateProjectDTO } from './project'
 import type { ProgressItem, CreateProgressDTO, UpdateProgressDTO } from './progress'
+import type { Conversation, ConversationMessage } from './conversation'
 
 export const IPC_CHANNELS = {
   PROJECT_LIST:    'project:list',
@@ -24,6 +25,12 @@ export const IPC_CHANNELS = {
   SETTINGS_GET:    'settings:get',
   SETTINGS_SET:    'settings:set',
   SETTINGS_GET_ALL:'settings:get-all',
+
+  CONVERSATION_LIST:   'conversation:list',
+  CONVERSATION_GET:    'conversation:get',
+  CONVERSATION_CREATE: 'conversation:create',
+  CONVERSATION_APPEND: 'conversation:append',
+  CONVERSATION_DELETE: 'conversation:delete',
 } as const
 
 export type IpcChannelMap = {
@@ -49,4 +56,10 @@ export type IpcChannelMap = {
   [IPC_CHANNELS.SETTINGS_GET]:    { request: string;                  response: string | null }
   [IPC_CHANNELS.SETTINGS_SET]:    { request: { key: string; value: string }; response: void }
   [IPC_CHANNELS.SETTINGS_GET_ALL]:{ request: void;                    response: Record<string, string> }
+
+  [IPC_CHANNELS.CONVERSATION_LIST]:   { request: string;                  response: Conversation[] }
+  [IPC_CHANNELS.CONVERSATION_GET]:    { request: string;                  response: Conversation | null }
+  [IPC_CHANNELS.CONVERSATION_CREATE]: { request: string;                  response: Conversation }
+  [IPC_CHANNELS.CONVERSATION_APPEND]: { request: { convId: string; message: ConversationMessage }; response: void }
+  [IPC_CHANNELS.CONVERSATION_DELETE]: { request: string;                  response: void }
 }

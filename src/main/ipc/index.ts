@@ -31,9 +31,11 @@ export function registerAllIpcHandlers(): void {
   const { registerProgressHandlers } = require('./progress.ipc')
   const { registerFileHandlers } = require('./file.ipc')
   const { registerSettingsHandlers } = require('./settings.ipc')
+  const { registerConversationHandlers } = require('./conversation.ipc')
 
   registerProjectHandlers()
   registerProgressHandlers()
   registerFileHandlers()
   registerSettingsHandlers()
+  registerConversationHandlers()
 }
