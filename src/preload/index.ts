@@ -5,6 +5,7 @@ import { fileApi } from './api/file.api'
 import { settingsApi } from './api/settings.api'
 import { agentApi } from './api/agent.api'
 import { conversationApi } from './api/conversation.api'
+import { modelApi } from './api/model.api'
 
 contextBridge.exposeInMainWorld('api', {
   project: projectApi,
@@ -13,4 +14,5 @@ contextBridge.exposeInMainWorld('api', {
   settings: settingsApi,
   agent: agentApi,
   conversation: conversationApi,
+  model: modelApi,
 })

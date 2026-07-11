@@ -3,6 +3,7 @@
 import type { IpcResult } from './types/errors'
 import type { Project, CreateProjectDTO, UpdateProjectDTO } from './types/project'
 import type { ProgressItem, CreateProgressDTO, UpdateProgressDTO } from './types/progress'
+import type { ModelConfig, CreateModelDTO, UpdateModelDTO } from './types/model'
 
 interface FileParams {
   projectId: string
@@ -53,6 +54,14 @@ interface WindowApi {
     create: (projectId: string) => Promise<IpcResult<import('./types/conversation').Conversation>>
     append: (convId: string, message: import('./types/conversation').ConversationMessage) => Promise<IpcResult<void>>
     delete: (id: string) => Promise<IpcResult<void>>
+  }
+  model: {
+    list: () => Promise<IpcResult<ModelConfig[]>>
+    get: (id: string) => Promise<IpcResult<ModelConfig | null>>
+    create: (dto: CreateModelDTO) => Promise<IpcResult<ModelConfig>>
+    update: (id: string, data: UpdateModelDTO) => Promise<IpcResult<ModelConfig>>
+    delete: (id: string) => Promise<IpcResult<void>>
+    setDefault: (id: string) => Promise<IpcResult<ModelConfig>>
   }
 }
 
