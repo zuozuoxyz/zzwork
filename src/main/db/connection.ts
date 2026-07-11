@@ -31,7 +31,6 @@ export function getConnection(): Database.Database {
 function runMigrations(db: Database.Database): void {
   const migrationPath = join(__dirname, '../db/migrations/001-init.sql')
   // In production, __dirname points to out/main; in dev with electron-vite, resolve accordingly
-  const fs = require('fs')
   const migrationPaths = [
     migrationPath,
     join(__dirname, '../../main/db/migrations/001-init.sql'),

@@ -47,6 +47,14 @@ export class ProjectRepo {
       throw new AppError('PROJECT_NOT_FOUND', '项目不存在')
     }
 
+    // Check duplicate name (if name is being changed)
+    if (dto.name !== undefined && dto.name !== existing.name) {
+      const duplicate = db.prepare('SELECT id FROM projects WHERE name = ? AND id != ?').get(dto.name, id)
+      if (duplicate) {
+        throw new AppError('PROJECT_NAME_DUPLICATE', `项目名称 "${dto.name}" 已存在`)
+      }
+    }
+
     const updated: Project = {
       ...existing,
       ...(dto.name !== undefined && { name: dto.name }),
