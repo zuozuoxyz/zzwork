@@ -1,6 +1,7 @@
 import { app, BrowserWindow, shell } from 'electron'
 import { join } from 'path'
 import { is } from '@electron-toolkit/utils'
+import { registerAllIpcHandlers } from './ipc'
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -36,6 +37,7 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  registerAllIpcHandlers()
   createWindow()
 
   app.on('activate', () => {
