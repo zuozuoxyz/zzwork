@@ -1,0 +1,16 @@
+appId: com.zzwork.app
+productName: zzwork
+directories:
+  buildResources: resources
+  output: dist
+files:
+  - out/**/*
+  - "!node_modules/**/*"
+linux:
+  target: AppImage
+mac:
+  target: dmg
+win:
+  target: nsis
+extraResources:
+  - resources/**
