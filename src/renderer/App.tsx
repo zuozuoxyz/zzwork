@@ -7,6 +7,7 @@ import AppShell from './components/layout/AppShell'
 import StatusBar from './components/layout/StatusBar'
 import AIPanel from './components/layout/AIPanel'
 import ProjectTree from './components/project/ProjectTree'
+import FileTree from './components/project/FileTree'
 import ProgressPanel from './components/progress/ProgressPanel'
 import EditorTabs from './components/editor/EditorTabs'
 import MonacoEditorWrapper from './components/editor/MonacoEditor'
@@ -19,6 +20,7 @@ export default function App(): JSX.Element {
     <ConfigProvider theme={antdTheme}>
       <AppShell
         projectTree={<ProjectTree />}
+        fileTree={<FileTree />}
         progressPanel={<ProgressPanel />}
         editorTabs={<EditorTabs />}
         editor={<MonacoEditorWrapper />}

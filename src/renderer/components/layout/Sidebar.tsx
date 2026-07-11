@@ -2,10 +2,11 @@ import { useUIStore } from '../../stores/ui.store'
 
 interface SidebarProps {
   top: React.ReactNode
+  middle?: React.ReactNode
   bottom: React.ReactNode
 }
 
-export default function Sidebar({ top, bottom }: SidebarProps): JSX.Element {
+export default function Sidebar({ top, middle, bottom }: SidebarProps): JSX.Element {
   const sidebarWidth = useUIStore((s) => s.sidebarWidth)
 
   return (
@@ -21,9 +22,17 @@ export default function Sidebar({ top, bottom }: SidebarProps): JSX.Element {
         flexShrink: 0,
       }}
     >
-      <div style={{ flex: '0 0 auto', maxHeight: '50%', overflow: 'auto' }}>
+      <div style={{ flex: '0 0 auto', maxHeight: '35%', overflow: 'auto' }}>
         {top}
       </div>
+      {middle && (
+        <div style={{
+          flex: '0 0 auto', maxHeight: '30%', overflow: 'auto',
+          borderTop: '2px solid #3e3e3e',
+        }}>
+          {middle}
+        </div>
+      )}
       <div style={{
         flex: '1 1 auto',
         overflow: 'auto',

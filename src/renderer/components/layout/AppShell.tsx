@@ -5,6 +5,7 @@ import ResizeHandle from '../shared/ResizeHandle'
 
 interface AppShellProps {
   projectTree: React.ReactNode
+  fileTree: React.ReactNode
   progressPanel: React.ReactNode
   editorTabs: React.ReactNode
   editor: React.ReactNode
@@ -14,6 +15,7 @@ interface AppShellProps {
 
 export default function AppShell({
   projectTree,
+  fileTree,
   progressPanel,
   editorTabs,
   editor,
@@ -40,7 +42,7 @@ export default function AppShell({
         overflow: 'hidden',
       }}>
         {/* Left sidebar */}
-        <Sidebar top={projectTree} bottom={progressPanel} />
+        <Sidebar top={projectTree} middle={fileTree} bottom={progressPanel} />
         <ResizeHandle position="left" onResize={resizeSidebar} />
 
         {/* Editor area */}
