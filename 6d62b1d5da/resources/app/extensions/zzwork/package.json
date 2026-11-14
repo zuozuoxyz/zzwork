@@ -1,0 +1,403 @@
+{
+	"name": "zzwork",
+	"displayName": "zzwork",
+	"description": "zzwork：任务工作台（任务管理 + AI 执行体 + 编辑器）",
+	"version": "0.3.0",
+	"publisher": "zzwork",
+	"engines": {
+		"vscode": "^1.140.0"
+	},
+	"categories": [
+		"Other"
+	],
+	"activationEvents": [
+		"onStartupFinished"
+	],
+	"main": "./extension.js",
+	"contributes": {
+		"configurationDefaults": {
+			"chat.commandCenter.enabled": false,
+			"chat.agent.enabled": false,
+			"chat.implicitContext.enabled": false,
+			"chat.editing.autoAcceptDelay": 0,
+			"editor.inlineSuggest.enabled": false,
+			"github.copilot.enable": {
+				"*": false
+			},
+			"notebook.experimental.generate": false,
+			"search.aiGenerateTitle": false,
+			"timeline.excludeSources": [],
+			"update.mode": "none",
+			"update.showReleaseNotes": false,
+			"update.enableWindowsBackgroundUpdates": false,
+			"workbench.startupEditor": "none",
+			"workbench.welcomePage.enabled": false,
+			"workbench.welcomePage.walkthroughs.openOnInstall": false,
+			"chat.tools.terminal.enabled": false,
+			"chat.variables": {},
+			"editor.ghostText.enabled": false,
+			"extensions.autoUpdate": false,
+			"extensions.ignoreRecommendations": true,
+			"workbench.settings.enableNaturalLanguageSearch": false,
+			"workbench.activityBar.location": "default"
+		},
+		"viewsContainers": {
+			"activitybar": [
+				{
+					"id": "zzwork-projects",
+					"title": "项目",
+					"icon": "media/zzwork.svg"
+				},
+				{
+					"id": "zzwork-envs",
+					"title": "环境",
+					"icon": "media/server.svg"
+				},
+				{
+					"id": "zzwork-skills",
+					"title": "Skills",
+					"icon": "media/skills.svg"
+				},
+				{
+					"id": "zzwork-mcp",
+					"title": "MCP",
+					"icon": "media/mcp.svg"
+				},
+				{
+					"id": "zzwork-models",
+					"title": "模型",
+					"icon": "media/model.svg"
+				},
+				{
+					"id": "zzwork-settings",
+					"title": "设置",
+					"icon": "media/gear.svg"
+				}
+			]
+		},
+		"views": {
+			"zzwork-projects": [
+				{
+					"id": "zzwork.tasks",
+					"name": "任务"
+				}
+			],
+			"zzwork-envs": [
+				{
+					"id": "zzwork.envs",
+					"name": "环境"
+				}
+			],
+			"zzwork-skills": [
+				{
+					"id": "zzwork.skills",
+					"name": "Skills"
+				}
+			],
+			"zzwork-mcp": [
+				{
+					"id": "zzwork.mcp",
+					"name": "MCP"
+				}
+			],
+			"zzwork-models": [
+				{
+					"id": "zzwork.models",
+					"name": "模型"
+				}
+			],
+			"zzwork-settings": [
+				{
+					"id": "zzwork.settings",
+					"name": "设置",
+					"type": "webview"
+				}
+			]
+		},
+		"commands": [
+			{
+				"command": "zzwork.newGroup",
+				"title": "新建组",
+				"icon": "$(add)"
+			},
+			{
+				"command": "zzwork.newTask",
+				"title": "新建任务",
+				"icon": "$(new-folder)"
+			},
+			{
+				"command": "zzwork.importTask",
+				"title": "导入文件夹为任务",
+				"icon": "$(folder-opened)"
+			},
+			{
+				"command": "zzwork.setWorkdir",
+				"title": "更改工作目录"
+			},
+			{
+				"command": "zzwork.renameTask",
+				"title": "重命名任务"
+			},
+			{
+				"command": "zzwork.moveTask",
+				"title": "移动到组…"
+			},
+			{
+				"command": "zzwork.deleteTask",
+				"title": "删除任务"
+			},
+			{
+				"command": "zzwork.setStatus",
+				"title": "切换完成状态"
+			},
+			{
+				"command": "zzwork.deleteGroup",
+				"title": "删除组"
+			},
+			{
+				"command": "zzwork.openFolder",
+				"title": "在 VS Code 工作区中打开"
+			},
+			{
+				"command": "zzwork.openInExplorer",
+				"title": "在系统资源管理器中显示"
+			},
+			{
+				"command": "zzwork.openAI",
+				"title": "打开 AI 会话"
+			},
+			{
+				"command": "zzwork.showDetail",
+				"title": "显示任务详情"
+			},
+			{
+				"command": "zzwork.refresh",
+				"title": "刷新",
+				"icon": "$(refresh)"
+			},
+			{
+				"command": "zzwork.rescan",
+				"title": "重新扫描环境",
+				"icon": "$(refresh)"
+			},
+			{
+				"command": "zzwork.addSkill",
+				"title": "添加 Skill"
+			},
+			{
+				"command": "zzwork.addMcp",
+				"title": "添加 MCP 服务"
+			},
+			{
+				"command": "zzwork.addEnv",
+				"title": "添加环境",
+				"icon": "$(add)"
+			},
+			{
+				"command": "zzwork.deleteEnv",
+				"title": "删除环境"
+			},
+			{
+				"command": "zzwork.deleteSkill",
+				"title": "删除 Skill"
+			},
+			{
+				"command": "zzwork.openSkill",
+				"title": "打开 SKILL.md"
+			},
+			{
+				"command": "zzwork.deleteMcp",
+				"title": "删除 MCP 服务"
+			},
+			{
+				"command": "zzwork.testMcp",
+				"title": "测试连接"
+			},
+			{
+				"command": "zzwork.addModel",
+				"title": "添加模型",
+				"icon": "$(add)"
+			},
+			{
+				"command": "zzwork.deleteModel",
+				"title": "删除模型"
+			},
+			{
+				"command": "zzwork.setDefaultModel",
+				"title": "设为默认模型"
+			},
+			{
+				"command": "zzwork.setModelKey",
+				"title": "设置 API Key"
+			},
+			{
+				"command": "zzwork.newFileInTask",
+				"title": "新建文件"
+			},
+			{
+				"command": "zzwork.newFolderInTask",
+				"title": "新建文件夹"
+			}
+		],
+		"menus": {
+			"view/title": [
+				{
+					"command": "zzwork.newTask",
+					"when": "view == zzwork.tasks",
+					"group": "navigation@1"
+				},
+				{
+					"command": "zzwork.newGroup",
+					"when": "view == zzwork.tasks",
+					"group": "navigation@2"
+				},
+				{
+					"command": "zzwork.importTask",
+					"when": "view == zzwork.tasks",
+					"group": "navigation@3"
+				},
+				{
+					"command": "zzwork.rescan",
+					"when": "view == zzwork.tasks",
+					"group": "navigation@4"
+				},
+				{
+					"command": "zzwork.addEnv",
+					"when": "view == zzwork.envs",
+					"group": "navigation@1"
+				},
+				{
+					"command": "zzwork.rescan",
+					"when": "view == zzwork.envs",
+					"group": "navigation@2"
+				},
+				{
+					"command": "zzwork.addSkill",
+					"when": "view == zzwork.skills",
+					"group": "navigation@1"
+				},
+				{
+					"command": "zzwork.rescan",
+					"when": "view == zzwork.skills",
+					"group": "navigation@2"
+				},
+				{
+					"command": "zzwork.addMcp",
+					"when": "view == zzwork.mcp",
+					"group": "navigation@1"
+				},
+				{
+					"command": "zzwork.rescan",
+					"when": "view == zzwork.mcp",
+					"group": "navigation@2"
+				},
+				{
+					"command": "zzwork.addModel",
+					"when": "view == zzwork.models",
+					"group": "navigation@1"
+				},
+				{
+					"command": "zzwork.rescan",
+					"when": "view == zzwork.models",
+					"group": "navigation@2"
+				}
+			],
+			"view/item/context": [
+				{
+					"command": "zzwork.newTask",
+					"when": "view == zzwork.tasks && viewItem == zzgroup",
+					"group": "inline"
+				},
+				{
+					"command": "zzwork.deleteGroup",
+					"when": "view == zzwork.tasks && viewItem == zzgroup"
+				},
+				{
+					"command": "zzwork.openAI",
+					"when": "view == zzwork.tasks && viewItem =~ /^task-/",
+					"group": "inline@1"
+				},
+				{
+					"command": "zzwork.setStatus",
+					"when": "view == zzwork.tasks && viewItem =~ /^task-/",
+					"group": "inline@2"
+				},
+				{
+					"command": "zzwork.renameTask",
+					"when": "view == zzwork.tasks && viewItem =~ /^task-/"
+				},
+				{
+					"command": "zzwork.moveTask",
+					"when": "view == zzwork.tasks && viewItem =~ /^task-/"
+				},
+				{
+					"command": "zzwork.openFolder",
+					"when": "view == zzwork.tasks && viewItem =~ /^task-/"
+				},
+				{
+					"command": "zzwork.openInExplorer",
+					"when": "view == zzwork.tasks && viewItem =~ /^task-/"
+				},
+				{
+					"command": "zzwork.deleteTask",
+					"when": "view == zzwork.tasks && viewItem =~ /^task-/"
+				},
+				{
+					"command": "zzwork.deleteEnv",
+					"when": "view == zzwork.envs && viewItem == zzenv"
+				},
+				{
+					"command": "zzwork.openSkill",
+					"when": "view == zzwork.skills && viewItem == zzskill",
+					"group": "inline"
+				},
+				{
+					"command": "zzwork.deleteSkill",
+					"when": "view == zzwork.skills && viewItem == zzskill"
+				},
+				{
+					"command": "zzwork.testMcp",
+					"when": "view == zzwork.mcp && viewItem == zzmcp",
+					"group": "inline"
+				},
+				{
+					"command": "zzwork.deleteMcp",
+					"when": "view == zzwork.mcp && viewItem == zzmcp"
+				},
+				{
+					"command": "zzwork.setDefaultModel",
+					"when": "view == zzwork.models && viewItem == zzmodel",
+					"group": "inline"
+				},
+				{
+					"command": "zzwork.setModelKey",
+					"when": "view == zzwork.models && viewItem == zzmodel"
+				},
+				{
+					"command": "zzwork.deleteModel",
+					"when": "view == zzwork.models && viewItem == zzmodel"
+				},
+				{
+					"command": "zzwork.newFileInTask",
+					"when": "view == zzwork.tasks && viewItem =~ /^task-/",
+					"group": "inline@3"
+				},
+				{
+					"command": "zzwork.newFolderInTask",
+					"when": "view == zzwork.tasks && viewItem =~ /^task-/"
+				}
+			]
+		}
+	},
+	"scripts": {
+		"test": "echo \"Error: no test specified\" && exit 1"
+	},
+	"keywords": [],
+	"author": "",
+	"license": "ISC",
+	"type": "commonjs",
+	"dependencies": {
+		"better-sqlite3": "^12.11.1",
+		"uuid": "^10.0.0"
+	}
+}

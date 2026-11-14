@@ -1,5 +1,32 @@
-node_modules/
-out/
-dist/
-.DS_Store
+# ==== zzwork 仓库：只跟踪我们写的代码，发行版二进制由构建脚本生成 ====
+# 忽略整个 VS Code 发行版结构，白名单放行我们的目录
+
+/* 
+!/.gitignore
+!/build.sh
+!/build.ps1
+!/README.md
+!/docs/
+!/scripts/
+!/patches/
+!/design/
+
+# 例外：内置扩展源码（真正随发行版分发，但属于我们写的）
+!/6d62b1d5da/
+/6d62b1d5da/*
+!/6d62b1d5da/resources/
+/6d62b1d5da/resources/*
+!/6d62b1d5da/resources/app/
+/6d62b1d5da/resources/app/*
+!/6d62b1d5da/resources/app/extensions/
+/6d62b1d5da/resources/app/extensions/*
+!/6d62b1d5da/resources/app/extensions/zzwork/
+
+# 扩展内依赖由构建脚本安装
+6d62b1d5da/resources/app/extensions/zzwork/node_modules/
+
+# 临时与本地文件
 *.log
+*.png
+.DS_Store
+Thumbs.db
