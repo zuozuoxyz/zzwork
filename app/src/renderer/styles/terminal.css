@@ -1,0 +1,40 @@
+/* 底部终端面板（标签 + 分屏） */
+#zzv .term-panel { display: none; flex-direction: column; flex: 0 0 auto; height: 260px; min-height: 120px;
+  background: var(--bg); border-top: 1px solid var(--bd); position: relative }
+#zzv .term-panel.on { display: flex }
+#zzv .term-grip { position: absolute; left: 0; right: 0; top: -3px; height: 6px; cursor: ns-resize; z-index: 5 }
+#zzv .term-grip:hover { background: rgba(14, 165, 233, .25) }
+#zzv .term-head { display: flex; align-items: center; height: 30px; flex: 0 0 auto; padding: 0 6px;
+  background: var(--chrome); border-bottom: 1px solid var(--bd); gap: 4px }
+#zzv .term-tabs { display: flex; align-items: center; gap: 2px; flex: 1; min-width: 0; overflow-x: auto }
+#zzv .term-tab { display: flex; align-items: center; height: 22px; padding: 0 8px; gap: 6px; border-radius: 5px;
+  color: var(--dim); font-size: 12px; cursor: pointer; white-space: nowrap; user-select: none }
+#zzv .term-tab:hover { color: var(--fg); background: rgba(255, 255, 255, .05) }
+#zzv .term-tab.on { color: var(--fg); background: var(--card2) }
+#zzv .term-tab .x { color: var(--faint); font-size: 13px; line-height: 1 }
+#zzv .term-tab .x:hover { color: var(--fg) }
+#zzv .term-actions { display: flex; align-items: center; gap: 2px; flex: 0 0 auto }
+#zzv .term-ib { width: 22px; height: 22px; display: flex; align-items: center; justify-content: center;
+  border: 0; background: none; color: var(--dim); border-radius: 4px; cursor: pointer; padding: 0 }
+#zzv .term-ib:hover { background: rgba(255, 255, 255, .08); color: var(--fg) }
+#zzv .term-body { flex: 1; display: flex; min-height: 0; background: var(--bg); position: relative }
+#zzv .term-tabroot { display: flex; flex: 1; min-width: 0; min-height: 0 }
+#zzv .term-node { display: flex; flex: 1; min-width: 0; min-height: 0 }
+#zzv .term-node.dir-col { flex-direction: column }
+#zzv .term-leaf { display: flex; flex: 1 1 0; min-width: 0; min-height: 0; position: relative; overflow: hidden }
+#zzv .term-pane { flex: 1; min-width: 0; min-height: 0; overflow: hidden }
+#zzv .term-divider { flex: 0 0 5px; background: transparent; cursor: col-resize; z-index: 4 }
+#zzv .term-divider.v { cursor: row-resize }
+#zzv .term-divider:hover, #zzv .term-divider:active { background: var(--bd2) }
+#zzv .term-px { position: absolute; top: 4px; right: 6px; width: 16px; height: 16px; line-height: 14px;
+  border: 0; border-radius: 3px; background: rgba(0, 0, 0, .35); color: var(--dim); cursor: pointer;
+  opacity: .35; z-index: 6; font-size: 13px }
+#zzv .term-leaf:hover .term-px { opacity: 1 }
+#zzv .term-px:hover { color: var(--fg); background: rgba(0, 0, 0, .6) }
+#zzv .term-empty { flex: 1; display: flex; align-items: center; justify-content: center; gap: 10px;
+  color: var(--faint); font-size: 12px }
+#zzv .term-empty .term-ib { width: auto; padding: 0 10px; height: 24px; border: 1px solid var(--bd); color: var(--dim) }
+#zzv .term-empty .term-ib:hover { color: var(--fg) }
+#zzv .ed.term-max > .tabs, #zzv .ed.term-max > .pane { display: none !important }
+#zzv .ed.term-max > .term-panel { flex: 1 1 auto; height: auto !important }
+#zzv #termToggle.on { color: var(--brand) }

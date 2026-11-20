@@ -1,32 +1,27 @@
-# ==== zzwork 仓库：只跟踪我们写的代码，发行版二进制由构建脚本生成 ====
-# 忽略整个 VS Code 发行版结构，白名单放行我们的目录
+# ==== zzwork 仓库：只跟踪源码与文档 ====
+# 忽略其余内容，白名单放行需要的目录
 
-/* 
+/*
 !/.gitignore
-!/build.sh
-!/build.ps1
 !/README.md
 !/docs/
-!/scripts/
-!/patches/
-!/design/
+!/app/
+!/.github/
 
-# 例外：内置扩展源码（真正随发行版分发，但属于我们写的）
-!/6d62b1d5da/
-/6d62b1d5da/*
-!/6d62b1d5da/resources/
-/6d62b1d5da/resources/*
-!/6d62b1d5da/resources/app/
-/6d62b1d5da/resources/app/*
-!/6d62b1d5da/resources/app/extensions/
-/6d62b1d5da/resources/app/extensions/*
-!/6d62b1d5da/resources/app/extensions/zzwork/
-
-# 扩展内依赖由构建脚本安装
-6d62b1d5da/resources/app/extensions/zzwork/node_modules/
+# Electron 应用：忽略依赖与构建产物
+/app/node_modules/
+/app/out/
+/app/release/
+/app/test/.tmp/
 
 # 临时与本地文件
 *.log
 *.png
 .DS_Store
 Thumbs.db
+
+# 打包图标需要入库（覆盖上面的 *.png 忽略）
+!/app/build/
+!/app/build/icon.png
+!/app/build/icon.ico
+!/app/build/icon.svg

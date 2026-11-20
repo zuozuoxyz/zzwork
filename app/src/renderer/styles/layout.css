@@ -1,0 +1,250 @@
+/* 布局微调：编辑器区域铺满 */
+#zzv .ed { position: relative }
+#zzv #pane-file { padding: 0 }
+#zzv .monaco-editor .margin { background: transparent }
+
+/* 标题栏过滤框 */
+#zzv .cmd input {
+  flex: 1; min-width: 0; height: 100%; border: 0; background: none; color: var(--fg);
+  font-size: 11px; outline: none; font-family: inherit; padding: 0;
+}
+#zzv .cmd input::placeholder { color: var(--faint) }
+
+/* 表单弹窗字段 */
+#zzv .zz-modal .mn { font-size: 11px; color: var(--faint); margin: -2px 0 10px }
+#zzv .zz-modal .mfields { display: flex; flex-direction: column; gap: 10px }
+#zzv .zz-modal .mf { display: flex; flex-direction: column; gap: 4px }
+#zzv .zz-modal .mf.inline { flex-direction: row; align-items: center; gap: 8px }
+#zzv .zz-modal .mf label { font-size: 11px; color: var(--dim) }
+#zzv .zz-modal .mf input[type="checkbox"] { width: auto; height: auto; accent-color: var(--brand) }
+#zzv .zz-modal textarea {
+  width: 100%; border-radius: 6px; background: var(--bg); border: 1px solid var(--bd2);
+  color: var(--fg); padding: 7px 9px; font-size: 12.5px; outline: none; resize: vertical;
+  font-family: inherit; line-height: 1.6;
+}
+#zzv .zz-modal textarea:focus { border-color: var(--accent) }
+#zzv .zz-modal .mh { font-size: 10.5px; color: var(--faint) }
+#zzv .zz-modal .bad { border-color: #f87171 !important }
+
+/* 提示条 */
+#toast-host { position: fixed; right: 16px; bottom: 34px; z-index: 200; display: flex;
+  flex-direction: column; gap: 6px; align-items: flex-end; pointer-events: none }
+#zzv .zz-toast { background: var(--card2); border: 1px solid var(--bd2); color: var(--fg);
+  padding: 7px 12px; border-radius: 7px; font-size: 12px; box-shadow: 0 8px 24px rgba(0,0,0,.45);
+  opacity: 0; transform: translateY(4px); transition: opacity .18s, transform .18s; max-width: 420px }
+#zzv .zz-toast.on { opacity: 1; transform: none }
+#zzv .zz-toast.err { border-color: rgba(248,113,113,.5); color: #fca5a5 }
+#zzv .zz-toast.warn { border-color: rgba(234,179,8,.5); color: #facc15 }
+
+/* 任务信息里的选择器与复选列表 */
+#zzv .sel2 { height: 24px; border-radius: 5px; background: var(--card2); border: 1px solid var(--bd2);
+  color: var(--fg); font-size: 12px; padding: 0 6px; outline: none; font-family: inherit; max-width: 100% }
+#zzv .chklist { display: flex; flex-direction: column; max-width: 720px }
+#zzv .chkrow { display: flex; align-items: center; gap: 8px; padding: 4px 6px; border-radius: 5px;
+  cursor: pointer; font-size: 12.5px }
+#zzv .chkrow:hover { background: rgba(255,255,255,.05) }
+#zzv .chkrow input { accent-color: var(--brand) }
+#zzv .chkrow .ds { margin-left: auto; color: var(--faint); font-size: 10.5px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; max-width: 45% }
+
+/* 文件树（VS Code 风格） */
+#zzv .treebar { display: flex; align-items: center; gap: 2px; padding: 2px 0 4px; border-bottom: 1px solid var(--bd) }
+#zzv .treebar .root { margin-left: auto; font-size: 10px; color: var(--faint); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; max-width: 50% }
+#zzv .ftree { padding: 4px 0; max-height: 320px; overflow: auto }
+#zzv .ftree .fr { gap: 4px; margin: 0; padding: 0 6px 0 4px; border-radius: 4px; height: 22px;
+  color: var(--dim); user-select: none; flex: 0 0 auto }
+#zzv .ftree .fr:hover { background: rgba(255,255,255,.06); color: var(--fg) }
+#zzv .ftree .fr.sel { background: rgba(57,148,188,.2); color: var(--fg) }
+#zzv .ftree .fr .ind { flex: 0 0 15px; align-self: stretch;
+  border-left: 1px solid rgba(250,250,250,.055) }
+#zzv .ftree .fr .chev { flex: 0 0 14px; width: 14px; display: inline-flex; align-items: center;
+  justify-content: center; color: var(--faint); transition: transform .12s ease }
+#zzv .ftree .fr.dir:hover .chev { color: var(--fg) }
+#zzv .ftree .fr.open .chev { transform: rotate(90deg) }
+#zzv .ftree .fr .fi { display: inline-flex; align-items: center; flex: 0 0 auto }
+#zzv .ftree .fr .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px }
+
+/* 项目面板：上（需求便签+任务树）/ 下（选中任务文件树） */
+#zzv .psplit { display: flex; flex-direction: column; flex: 1; min-height: 0 }
+#zzv .pspane { display: flex; flex-direction: column; min-height: 0; flex: 1 1 0 }
+#zzv .psplit-bar { flex: 0 0 5px; cursor: ns-resize; position: relative; z-index: 3;
+  border-top: 1px solid var(--bd); background: transparent }
+#zzv .psplit-bar:hover, #zzv .psplit-bar:active { background: rgba(14,165,233,.25) }
+#zzv #filesTree { display: flex; flex-direction: column; overflow: hidden; padding: 2px 8px 4px }
+#zzv #filesTree .ftree { flex: 1; min-height: 0; max-height: none; overflow: auto }
+
+/* 会话头部：新建按钮 + 会话标签 */
+#zzv .ctop { row-gap: 5px; min-width: 0 }
+#zzv .chsess { display: flex; gap: 6px; align-items: center; overflow-x: auto; min-width: 0; flex: 1 1 auto;
+  scrollbar-width: thin }
+#zzv .chsess::-webkit-scrollbar { height: 4px }
+#zzv .chsess-item { height: 24px; padding: 0 10px; border-radius: 12px; border: 1px solid var(--bd2);
+  background: transparent; color: var(--dim); font-size: 11.5px; cursor: pointer; white-space: nowrap;
+  max-width: 180px; overflow: hidden; text-overflow: ellipsis; flex: 0 0 auto }
+#zzv .chsess-item:hover { background: rgba(255,255,255,.07); color: var(--fg) }
+#zzv .chsess-item.on { background: rgba(14,165,233,.16); border-color: rgba(96,165,250,.4); color: var(--fg) }
+
+/* 变更/摘要/子代理/计划卡片 */
+#zzv .ctxchg { border: 1px solid var(--bd); background: var(--card); border-radius: 7px;
+  padding: 6px 10px; font-size: 11.5px; color: var(--dim); max-width: 96% }
+#zzv .ctxchg summary { cursor: pointer; color: #7dd3fc }
+#zzv .ctxchg pre { max-height: 220px; overflow: auto; white-space: pre-wrap; font-size: 11px;
+  margin: 6px 0 0; color: var(--dim); font-family: Consolas, monospace }
+#zzv .sumbox { border: 1px dashed var(--bd2); border-radius: 7px; padding: 6px 10px;
+  font-size: 11.5px; color: var(--dim); max-width: 96% }
+#zzv .sumbox summary { cursor: pointer; color: var(--warn) }
+#zzv .sumbox .sbody { white-space: pre-wrap; margin-top: 5px }
+#zzv .subcard { border: 1px solid rgba(45,212,191,.28); background: rgba(45,212,191,.06);
+  border-radius: 9px; padding: 8px 11px; max-width: 90%; font-size: 12px }
+#zzv .subcard .shead { display: flex; align-items: center; gap: 8px }
+#zzv .subcard .stt { font-weight: 500 }
+#zzv .subcard .sst { font-size: 10.5px; color: var(--faint); margin-left: auto }
+#zzv .subcard .sres { margin-top: 6px; color: var(--dim); font-size: 11.5px;
+  white-space: pre-wrap; word-break: break-word; max-height: 160px; overflow: auto }
+#zzv .subcard .open { margin-top: 7px }
+#zzv .planbox { border: 1px solid var(--bd); background: var(--card); border-radius: 7px;
+  padding: 7px 10px; font-size: 11.5px; color: var(--dim); max-width: 96%; white-space: pre-wrap }
+
+/* AskUserQuestion 提问卡片 */
+#zzv .askcard { border: 1px solid rgba(96,165,250,.35); background: rgba(14,165,233,.07);
+  border-radius: 9px; padding: 9px 12px; max-width: 96%; font-size: 12px }
+#zzv .askcard .ahead { display: flex; align-items: center; gap: 6px; color: #7dd3fc;
+  font-size: 11.5px; font-weight: 500; margin-bottom: 8px }
+#zzv .askcard .aq { margin: 8px 0 }
+#zzv .askcard .aq + .aq { border-top: 1px solid var(--bd); padding-top: 8px }
+#zzv .askcard .qq { color: var(--fg); font-size: 12px; margin-bottom: 6px; display: flex;
+  align-items: center; gap: 8px; flex-wrap: wrap }
+#zzv .askcard .qmulti { font-size: 10px; color: var(--faint); border: 1px solid var(--bd2);
+  border-radius: 4px; padding: 0 5px }
+#zzv .askcard .qopts { display: flex; flex-direction: column; gap: 5px }
+#zzv .askcard .qopt { display: flex; align-items: baseline; gap: 8px; text-align: left;
+  padding: 7px 10px; border: 1px solid var(--bd2); border-radius: 7px; background: var(--card);
+  color: var(--fg); font-family: inherit; font-size: 12px; cursor: pointer }
+#zzv .askcard .qopt:hover:not([disabled]) { border-color: rgba(96,165,250,.5); background: rgba(14,165,233,.1) }
+#zzv .askcard .qopt.on { border-color: var(--accent); background: rgba(14,165,233,.2) }
+#zzv .askcard .qopt[disabled] { cursor: default; opacity: .7 }
+#zzv .askcard .qopt .olabel { font-weight: 500; flex: 0 0 auto }
+#zzv .askcard .qopt .odesc { color: var(--faint); font-size: 11px }
+#zzv .askcard .qother { width: 100%; margin-top: 6px; height: 28px; border-radius: 6px;
+  background: var(--bg); border: 1px solid var(--bd2); color: var(--fg); font-size: 12px;
+  padding: 0 9px; outline: none; font-family: inherit; box-sizing: border-box }
+#zzv .askcard .qother:focus { border-color: var(--accent) }
+#zzv .askcard .afoot { display: flex; justify-content: flex-end; margin-top: 10px }
+#zzv .askcard .fdone { display: inline-flex; align-items: center; gap: 5px; color: #4ade80; font-size: 11px }
+
+/* 需求便签：侧栏入口 + 编辑区唯一 tab */
+#zzv .inbox { border-bottom: 1px solid var(--bd); padding: 6px 8px; flex: 0 0 auto }
+#zzv .inbox-entry { width: 100%; display: flex; align-items: center; gap: 7px; padding: 6px 8px;
+  border: 1px solid var(--bd2); border-radius: 6px; background: var(--card); color: var(--dim);
+  font-size: 11.5px; font-family: inherit; cursor: pointer }
+#zzv .inbox-entry:hover { background: rgba(255,255,255,.07); color: var(--fg) }
+#zzv .inbox-entry .t { flex: 1; text-align: left }
+#zzv .inbox-entry .hint { font-size: 10px; color: var(--faint) }
+#zzv #pane-inbox { flex-direction: column }
+#zzv #pane-inbox.on { display: flex }
+#zzv .inboxpane { display: flex; flex-direction: column; height: 100%; padding: 12px 16px; box-sizing: border-box }
+#zzv .inboxbar { display: flex; align-items: center; gap: 8px; padding-bottom: 8px;
+  border-bottom: 1px solid var(--bd); font-size: 12px; color: var(--dim) }
+#zzv .inboxbar .t { font-size: 13px; font-weight: 500; color: var(--fg) }
+#zzv .inboxbar .hint { font-size: 10.5px; color: var(--faint) }
+#zzv .inboxbar .sp { flex: 1 }
+#zzv #inboxInput { flex: 1; width: 100%; margin-top: 10px; resize: none; background: var(--card2);
+  border: 1px solid var(--bd2); border-radius: 8px; color: var(--fg); font-size: 12.5px;
+  font-family: inherit; padding: 10px 12px; outline: none; line-height: 1.6 }
+#zzv #inboxInput:focus { border-color: var(--accent) }
+
+/* 任务信息：简介、记忆、会话列表 */
+#zzv .briefcell { max-width: 720px; margin-bottom: 4px }
+#zzv .briefcell .v { line-height: 1.65; white-space: pre-wrap }
+#zzv .sessrow { display: flex; align-items: center; gap: 8px; max-width: 720px; font-size: 12px;
+  padding: 5px 8px; border: 1px solid var(--bd); border-radius: 6px; margin-bottom: 4px; cursor: pointer }
+#zzv .sessrow:hover { border-color: var(--bd2) }
+#zzv .sessrow .sn { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+#zzv .sessrow .sd { color: var(--faint); font-size: 10.5px }
+#zzv .membox { max-width: 720px; min-height: 76px; margin-bottom: 6px }
+
+/* 归类确认弹窗 */
+#zzv .zz-modal.tr { width: 760px; max-width: 94vw }
+#zzv .tri-row { display: grid; grid-template-columns: 1fr 118px 190px; gap: 8px; align-items: center;
+  border-top: 1px solid var(--bd); padding: 8px 0; font-size: 12px }
+#zzv .tri-row .txt { color: var(--fg); word-break: break-word }
+#zzv .tri-row input, #zzv .tri-row select { height: 26px; border-radius: 5px; background: var(--bg);
+  border: 1px solid var(--bd2); color: var(--fg); font-size: 11.5px; padding: 0 6px;
+  font-family: inherit; outline: none; width: 100% }
+#zzv .tri-row .sub { grid-column: 1 / -1; display: flex; gap: 6px; align-items: center;
+  color: var(--faint); font-size: 10.5px }
+#zzv .tri-foot { display: flex; align-items: center; gap: 10px; margin-top: 10px;
+  font-size: 11px; color: var(--dim) }
+#zzv .tri-foot .sp { flex: 1 }
+
+/* 本次对话 diff 卡片 */
+#zzv .diffbox { border: 1px solid var(--bd); background: var(--card); border-radius: 7px;
+  padding: 6px 10px; max-width: 96%; font-size: 11.5px }
+#zzv .diffbox > summary.dhead { display: flex; align-items: center; gap: 6px; color: #7dd3fc;
+  font-size: 11.5px; padding-bottom: 3px; cursor: pointer; list-style: none }
+#zzv .diffbox > summary.dhead::-webkit-details-marker { display: none }
+#zzv .diffbox .dhead .dbchev { display: inline-flex; color: var(--faint); transition: transform .15s }
+#zzv .diffbox[open] .dhead .dbchev { transform: rotate(90deg) }
+#zzv .diffbox .dhead .dtitle { overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+#zzv .diffbox .dhead .dfiles { flex: 0 0 auto; color: var(--dim); font-size: 10.5px }
+#zzv .diffbox .dhead .dstat { margin-left: auto; flex: 0 0 auto; display: flex; gap: 5px; font-size: 10.5px }
+#zzv .diffbox .dhead .dnote { color: var(--warn); font-size: 10.5px }
+#zzv .drow { border-top: 1px solid var(--bd) }
+#zzv .drow > summary { display: flex; align-items: center; gap: 7px; cursor: pointer; padding: 4px 0;
+  color: var(--dim); font-size: 11.5px; list-style: none }
+#zzv .drow > summary::-webkit-details-marker { display: none }
+#zzv .drow > summary:hover { color: var(--fg) }
+#zzv .drow .dst { flex: 0 0 auto; width: 15px; height: 15px; border-radius: 3px; text-align: center;
+  line-height: 15px; font-size: 9.5px; font-weight: 600; color: #0b0e14 }
+#zzv .drow .dst.add { background: #4ade80 }
+#zzv .drow .dst.del { background: #f87171 }
+#zzv .drow .dst.mod { background: #eab308 }
+#zzv .drow .dp { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--mono, monospace); font-size: 11px }
+#zzv .drow .dn { flex: 0 0 auto; display: flex; gap: 5px; font-size: 10.5px }
+#zzv .drow .plus { color: #4ade80 }
+#zzv .drow .minus { color: #f87171 }
+#zzv .drow pre { margin: 4px 0 6px; max-height: 320px; overflow: auto; white-space: pre;
+  font-family: var(--mono, monospace); font-size: 10.5px; line-height: 1.5;
+  background: var(--bg); border-radius: 5px; padding: 6px 8px }
+#zzv .drow .dl { display: block }
+#zzv .drow .dl.meta { color: var(--faint) }
+#zzv .drow .dl.hunk { color: #7dd3fc }
+#zzv .drow .dl.in { color: #4ade80; background: rgba(74,222,128,.08) }
+#zzv .drow .dl.out { color: #f87171; background: rgba(248,113,113,.08) }
+#zzv .drow .dtag { color: var(--faint); font-size: 10.5px; padding: 4px 0 6px }
+#zzv .drow .dopen { padding: 2px 0 6px }
+#zzv .drow .dopen button { font-size: 10.5px; color: #7dd3fc; background: transparent;
+  border: 1px solid var(--bd2); border-radius: 4px; padding: 2px 8px; cursor: pointer }
+#zzv .drow .dopen button:hover { background: rgba(14,165,233,.15); color: var(--fg) }
+#zzv .diffbox .dhead .dall { flex: 0 0 auto; font-size: 10.5px; color: #7dd3fc; background: transparent;
+  border: 1px solid var(--bd2); border-radius: 4px; padding: 1px 7px; cursor: pointer }
+#zzv .diffbox .dhead .dall:hover { background: rgba(14,165,233,.15); color: var(--fg) }
+
+/* @ 文件/文件夹引用选择器（逐层浏览） */
+#zzv .comp { position: relative }
+#zzv #chatMention { position: absolute; left: 14px; right: 14px; bottom: 100%; margin-bottom: 6px;
+  display: none; max-height: 280px; overflow: auto; z-index: 60;
+  background: var(--card2); border: 1px solid var(--bd2); border-radius: 8px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.5); padding: 4px }
+#zzv #chatMention .mbc { position: sticky; top: 0; z-index: 1; display: flex; align-items: center;
+  gap: 2px; flex-wrap: wrap; padding: 4px 6px 5px; margin: -4px -4px 3px; background: var(--card2);
+  border-bottom: 1px solid var(--bd); font-size: 10.5px; color: var(--faint) }
+#zzv #chatMention .mbc .msep { color: var(--faint) }
+#zzv #chatMention .mbc .sp { flex: 1 }
+#zzv #chatMention .mcrumb { cursor: pointer; color: var(--dim); padding: 1px 3px; border-radius: 3px }
+#zzv #chatMention .mcrumb:hover { color: var(--fg); background: rgba(255,255,255,.08) }
+#zzv #chatMention .mrefdir { cursor: pointer; color: #7dd3fc; padding: 1px 6px; border-radius: 4px;
+  border: 1px solid rgba(96,165,250,.35); white-space: nowrap }
+#zzv #chatMention .mrefdir:hover { background: rgba(14,165,233,.18); color: var(--fg) }
+#zzv #chatMention .mi { display: flex; align-items: center; gap: 6px; padding: 5px 8px;
+  border-radius: 5px; cursor: pointer; font-size: 11.5px; color: var(--dim);
+  white-space: nowrap; overflow: hidden }
+#zzv #chatMention .mi:hover, #zzv #chatMention .mi.on {
+  background: rgba(14,165,233,.18); color: var(--fg) }
+#zzv #chatMention .mi svg { flex: 0 0 auto; color: var(--faint) }
+#zzv #chatMention .mi .mn { flex: 1; overflow: hidden; text-overflow: ellipsis }
+#zzv #chatMention .mi.dir .mref { flex: 0 0 auto; font-size: 10px; color: var(--faint);
+  border: 1px solid var(--bd2); border-radius: 4px; padding: 1px 6px }
+#zzv #chatMention .mi.dir .mref:hover { color: var(--fg); border-color: var(--accent) }

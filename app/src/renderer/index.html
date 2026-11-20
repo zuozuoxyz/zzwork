@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://localhost:* http://localhost:*; worker-src 'self' blob:">
+<title>zzwork</title>
+<link rel="stylesheet" href="./styles/theme.css">
+<link rel="stylesheet" href="./styles/layout.css">
+<link rel="stylesheet" href="./styles/terminal.css">
+</head>
+<body>
+<div id="zzv">
+  <div class="win">
+    <div class="titlebar">
+      <svg class="mark" viewBox="0 0 512 512" aria-hidden="true">
+        <defs>
+          <linearGradient id="zzmark" x1="0.1" y1="0.1" x2="0.9" y2="0.9">
+            <stop offset="0" stop-color="#38bdf8"/>
+            <stop offset="1" stop-color="#2dd4bf"/>
+          </linearGradient>
+        </defs>
+        <rect width="512" height="512" rx="116" fill="#12161c"/>
+        <path d="M140 140 H342 L140 306 H342" fill="none" stroke="url(#zzmark)" stroke-width="64" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M280 256 H412 L280 390 H412" fill="none" stroke="url(#zzmark)" stroke-width="46" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg><span class="brand">zzwork</span>
+      <div class="cmd"><i data-lucide="search" style="width:11px;height:11px"></i>
+        <input id="cmdInput" placeholder="过滤任务、Skills、MCP、模型" autocomplete="off" spellcheck="false">
+      </div>
+      <div style="flex:1"></div>
+      <button class="ib" id="termToggle" title="终端 (Ctrl+`)"><i data-lucide="square-terminal" style="width:14px;height:14px"></i></button>
+    </div>
+
+    <div class="body">
+      <div class="ab" id="activitybar">
+        <button class="abi on" data-view="projects" title="项目"><i data-lucide="folder-check" style="width:20px;height:20px"></i></button>
+        <button class="abi" data-view="envs" title="环境"><i data-lucide="server" style="width:20px;height:20px"></i></button>
+        <button class="abi" data-view="skills" title="Skills"><i data-lucide="wand-sparkles" style="width:20px;height:20px"></i></button>
+        <button class="abi" data-view="mcp" title="MCP"><i data-lucide="plug" style="width:20px;height:20px"></i></button>
+        <button class="abi" data-view="models" title="模型"><i data-lucide="cpu" style="width:20px;height:20px"></i></button>
+        <div class="absep"></div>
+        <div class="sp"></div>
+        <button class="abi" id="abSet" title="设置"><i data-lucide="settings" style="width:19px;height:19px"></i></button>
+      </div>
+
+      <div class="side">
+        <div class="panel on" id="panel-projects">
+          <div class="phead"><span class="t">项目</span>
+            <button class="ib" id="newTaskBtn" title="新建任务"><i data-lucide="square-plus" style="width:14px;height:14px"></i></button>
+            <button class="ib" id="newGroupBtn" title="新建组"><i data-lucide="folder-plus" style="width:14px;height:14px"></i></button>
+            <button class="ib" id="refreshTasksBtn" title="刷新"><i data-lucide="rotate-cw" style="width:13px;height:13px"></i></button>
+          </div>
+          <div class="psplit" id="projectsSplit">
+            <div class="pspane" id="projectsTop">
+              <div class="inbox" id="inboxWrap">
+                <button class="inbox-entry" id="openInboxBtn" title="打开需求便签">
+                  <i data-lucide="sticky-note" style="width:13px;height:13px"></i>
+                  <span class="t">需求便签</span>
+                  <span class="hint">点击打开</span>
+                </button>
+              </div>
+              <div class="pbody" id="projectsBody"></div>
+            </div>
+            <div class="psplit-bar" id="projectsSplitBar" title="拖动调整"></div>
+            <div class="pspane" id="projectsFiles">
+              <div class="pbody" id="filesTree"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel" id="panel-envs">
+          <div class="phead"><span class="t">环境</span>
+            <button class="ib" id="addEnvBtn" title="添加环境"><i data-lucide="plus" style="width:14px;height:14px"></i></button>
+            <button class="ib" id="scanEnvBtn" title="刷新识别"><i data-lucide="refresh-cw" style="width:13px;height:13px"></i></button>
+          </div>
+          <div class="pbody" id="envsBody"></div>
+        </div>
+
+        <div class="panel" id="panel-skills">
+          <div class="phead"><span class="t">Skills</span>
+            <button class="ib" id="addSkillBtn" title="添加 Skill"><i data-lucide="plus" style="width:14px;height:14px"></i></button>
+            <button class="ib" id="scanSkillsBtn" title="重新扫描"><i data-lucide="refresh-cw" style="width:13px;height:13px"></i></button>
+          </div>
+          <div class="pbody" id="skillsBody"></div>
+        </div>
+
+        <div class="panel" id="panel-mcp">
+          <div class="phead"><span class="t">MCP</span>
+            <button class="ib" id="addMcpBtn" title="添加 MCP 服务"><i data-lucide="plus" style="width:14px;height:14px"></i></button>
+          </div>
+          <div class="pbody" id="mcpBody"></div>
+        </div>
+
+        <div class="panel" id="panel-models">
+          <div class="phead"><span class="t">模型</span>
+            <button class="ib" id="addModelBtn" title="添加模型"><i data-lucide="plus" style="width:14px;height:14px"></i></button>
+          </div>
+          <div class="pbody" id="modelsBody"></div>
+        </div>
+
+        <div class="panel" id="panel-settings">
+          <div class="phead"><span class="t">设置</span></div>
+          <div class="pbody">
+            <div class="row sel" id="setGeneralRow"><i data-lucide="folder-cog" style="width:13px;height:13px"></i><span class="nm">常规设置</span></div>
+            <div class="row" id="setAboutRow"><i data-lucide="info" style="width:13px;height:13px"></i><span class="nm">关于</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="ed">
+        <div class="tabs" id="tabbar"></div>
+
+        <div class="pane on" id="pane-info"><div class="pg" id="infoBody"></div></div>
+
+        <div class="pane" id="pane-inbox">
+          <div class="inboxpane">
+            <div class="inboxbar">
+              <i data-lucide="sticky-note" style="width:13px;height:13px"></i>
+              <span class="t">需求便签</span>
+              <span class="hint" id="inboxHint">自动保存到工作区 .zzwork/inbox.md</span>
+              <span class="sp"></span>
+              <button class="btn sm" id="triageBtn"><i data-lucide="list-checks" style="width:13px;height:13px"></i>归类并执行</button>
+            </div>
+            <textarea id="inboxInput" placeholder="随手记录需求，每行一条；点击右上角归类并执行…" spellcheck="false"></textarea>
+          </div>
+        </div>
+
+        <div class="pane" id="pane-session">
+          <div class="seswrap">
+            <div class="sesmain">
+              <div class="seshdl">
+                <span>会话</span>
+                <div class="sel" id="sessionLabel">当前任务</div>
+                <span style="margin-left:auto;color:var(--faint)">自动保存</span>
+              </div>
+              <div class="lab2">提示词</div>
+              <textarea class="ptxt2" id="sessionPrompt" placeholder="补充本任务的系统提示词（保存在本机，不写入仓库）" spellcheck="false"></textarea>
+              <div class="lab2">改动 · 随消息一起发送</div>
+              <div id="sessionChanges"></div>
+            </div>
+            <div class="sescvs">
+              <div class="ctools">
+                <button class="ib on" id="cvsPen" title="自由画笔"><i data-lucide="pen-tool" style="width:14px;height:14px"></i></button>
+                <button class="ib" id="cvsClear" title="清空"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
+                <span class="lbl">画板</span>
+              </div>
+              <div class="cvs"><canvas id="cvsCanvas"></canvas></div>
+              <div class="ccap"><i data-lucide="sparkles" style="width:11px;height:11px"></i>画板按结构化数据保存</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="pane" id="pane-ai">
+          <div class="aiwrap"><div class="chatcol">
+            <div class="ctop">
+              <button class="ib" id="newSessionBtn" title="新建会话"><i data-lucide="plus" style="width:14px;height:14px"></i></button>
+              <div class="chsess" id="aiSessionList"></div>
+            </div>
+            <div class="chat" id="chatScroll"><div class="inner" id="chatInner"></div></div>
+            <div class="comp"><div class="shellpanel" id="chatShells"></div><div class="attstrip" id="chatAttach"></div><div class="cwrap">
+              <textarea class="inp" id="chatInput" rows="1" placeholder="继续发送…（Enter 发送，Shift+Enter 换行）" spellcheck="false"></textarea>
+              <button class="stopbtn" id="chatStop">停止</button>
+              <button class="send" id="chatSend">发送</button>
+            </div></div>
+          </div></div>
+        </div>
+
+        <div class="pane" id="pane-file"><div id="editorHost"></div></div>
+        <div class="pane" id="pane-item"><div class="setbody" id="itemBody"></div></div>
+        <div class="pane" id="pane-settings"><div class="setbody" id="settingsBody"></div></div>
+
+        <div class="term-panel" id="termPanel">
+          <div class="term-grip" id="termResize"></div>
+          <div class="term-head">
+            <div class="term-tabs" id="termTabs"></div>
+            <div class="term-actions">
+              <button class="term-ib" id="termNew" title="新建终端"><i data-lucide="plus" style="width:14px;height:14px"></i></button>
+              <button class="term-ib" id="termSplitH" title="向右拆分"><i data-lucide="columns-2" style="width:14px;height:14px"></i></button>
+              <button class="term-ib" id="termSplitV" title="向下拆分"><i data-lucide="rows-2" style="width:14px;height:14px"></i></button>
+              <button class="term-ib" id="termMax" title="最大化面板"><i data-lucide="maximize-2" style="width:14px;height:14px"></i></button>
+              <button class="term-ib" id="termClose" title="收起面板 (Ctrl+`)"><i data-lucide="chevron-down" style="width:14px;height:14px"></i></button>
+            </div>
+          </div>
+          <div class="term-body" id="termBody"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="st">
+      <span class="lf" id="stTask">未选择任务</span>
+      <span class="s"></span>
+      <span id="stRight"></span>
+      <span id="stVersion">zzwork 0.4</span>
+    </div>
+  </div>
+
+  <div id="modal-host"></div>
+  <div id="ctx-host"></div>
+  <div id="toast-host"></div>
+</div>
+<script type="module" src="./main.js"></script>
+</body>
+</html>
