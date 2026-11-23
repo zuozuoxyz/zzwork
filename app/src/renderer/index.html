@@ -130,9 +130,10 @@
                   <span class="t">需求便签</span>
                   <span class="hint" id="inboxHint">自动保存到工作区 .zzwork/inbox.md</span>
                   <span class="sp"></span>
-                  <button class="btn sm" id="triageBtn"><i data-lucide="list-checks" style="width:13px;height:13px"></i>归类并执行</button>
+                  <button class="btn sm" id="triageBtn"><i data-lucide="list-checks" style="width:13px;height:13px"></i><span id="triageBtnLabel">归类并执行</span></button>
                 </div>
                 <textarea id="inboxInput" placeholder="随手记录需求，每行一条；点击右上角归类并执行…" spellcheck="false"></textarea>
+                <div class="inboxreview" id="inboxReview" hidden></div>
               </div>
               <div class="inboxvdiv" id="inboxVDiv" title="拖动调整上下"></div>
               <div class="codepane">
@@ -238,7 +239,7 @@
       <span class="lf" id="stTask">未选择任务</span>
       <span class="s"></span>
       <span id="stRight"></span>
-      <span id="stVersion">zzwork 0.5.0</span>
+      <span id="stVersion">zzwork 0.6.0</span>
     </div>
   </div>
 

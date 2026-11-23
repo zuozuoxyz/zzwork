@@ -181,6 +181,50 @@ export default [
     }
   },
   {
+    name: '拖动：未开始可直接拖到已完成',
+    async run(app) {
+      await ensureAI(app)
+      await app.call(() => { document.querySelectorAll('.zz-modal-mask').forEach((m) => m.remove()); return true })
+      const card = await app.invoke('board', 'create', { title: '直接归档任务', content: '无需作答，直接完成' })
+      await app.click('.abi[data-view="board"]')
+      await app.waitFor(() => !!document.querySelector('.boardcols'), 8000, '看板网格')
+      await app.waitFor(`[...document.querySelectorAll('.bcol[data-col="todo"] .bcard')].some(e=>e.textContent.includes('直接归档任务'))`, 8000, '卡片在未开始列')
+      // 未开始 → 已完成：直接归档，不触发 AI 作答
+      const ok = await dragCard(app, card.id, 'done')
+      assert.ok(ok, '拖拽应被处理')
+      await app.waitFor(`(async () => {
+        const l = await window.zzwork.invoke('board', 'list')
+        const c = l.find((x) => x.id === ${JSON.stringify(card.id)})
+        return !!(c && c.status === 'done')
+      })()`, 8000, '未开始拖到已完成')
+      await app.waitFor(`[...document.querySelectorAll('.bcol[data-col="done"] .bcard')].some(e=>e.textContent.includes('直接归档任务'))`, 8000, '卡片在已完成列')
+      const l = await boardList(app)
+      const c = l.find((x) => x.id === card.id)
+      assert.equal(c.status, 'done', '卡片应为已完成')
+    }
+  },
+  {
+    name: '拖动：已完成可拖回待审核',
+    async run(app) {
+      await ensureAI(app)
+      await app.call(() => { document.querySelectorAll('.zz-modal-mask').forEach((m) => m.remove()); return true })
+      const card = await app.invoke('board', 'create', { title: '打回任务', content: '完成后又能打回待审核' })
+      await app.invoke('board', 'finish', { id: card.id })
+      await app.click('.abi[data-view="board"]')
+      await app.waitFor(() => !!document.querySelector('.boardcols'), 8000, '看板网格')
+      await app.waitFor(`[...document.querySelectorAll('.bcol[data-col="done"] .bcard')].some(e=>e.textContent.includes('打回任务'))`, 8000, '卡片在已完成列')
+      // 已完成 → 待审核：直接改状态，不重新作答
+      const ok = await dragCard(app, card.id, 'review')
+      assert.ok(ok, '拖拽应被处理')
+      await app.waitFor(`(async () => {
+        const l = await window.zzwork.invoke('board', 'list')
+        const c = l.find((x) => x.id === ${JSON.stringify(card.id)})
+        return !!(c && c.status === 'review')
+      })()`, 8000, '已完成拖回待审核')
+      await app.waitFor(`[...document.querySelectorAll('.bcol[data-col="review"] .bcard')].some(e=>e.textContent.includes('打回任务'))`, 8000, '卡片在待审核列')
+    }
+  },
+  {
     name: '开始卡片→进行中 AI 作答→待审核→追问→已完成',
     async run(app) {
       await ensureAI(app)

@@ -7,6 +7,8 @@ import { toast } from '../components/toast.js'
 
 let loaded = false
 let busy = false
+// 归类审阅进行中：{ base: 原始便签内容, confirmed: 已确认应用的行文本[] }
+let review = null
 // 拖拽改状态：{ id, type, scope, status }
 let inboxDrag = null
 // 分栏比例（相对容器）：左右宽、左上高
@@ -28,7 +30,10 @@ export function initInboxView() {
     } catch (e) { setHint('保存失败：' + e.message) }
   }, 500)
   input.addEventListener('input', save)
-  $('#triageBtn').addEventListener('click', () => runTriage().catch((e) => toast(e.message, 'err')))
+  $('#triageBtn').addEventListener('click', () => {
+    if (review) { finishReview({ cancelled: true }); return }
+    runTriage().catch((e) => toast(e.message, 'err'))
+  })
   initInboxSplit()
   loadInboxRatios().catch(() => {})
   loadInbox()
@@ -245,169 +250,204 @@ async function dropToColumn(src, col) {
 async function runTriage() {
   if (busy) return
   const input = $('#inboxInput')
+  if (!input) return
   const content = input.value.trim()
   if (!content) { toast('便签是空的，先记录几条需求'); return }
   busy = true
+  setTriageButton('running')
   setHint('正在归类…')
+  input.readOnly = true
+  input.classList.add('busy')
   let result
   try {
     result = await inboxInvoke('triage', { content })
-  } finally {
+  } catch (e) {
     busy = false
+    setTriageButton('idle')
+    input.readOnly = false
+    input.classList.remove('busy')
+    setHint('自动保存到工作区 .zzwork/inbox.md')
+    toast('归类失败：' + e.message, 'err', 4000)
+    return
   }
   const items = (result && result.items) || []
-  if (!items.length) { toast('没有可归类的需求行'); setHint('自动保存到工作区 .zzwork/inbox.md'); return }
-  setHint(`归类完成（${result.mode === 'llm' ? 'AI' : '关键词'}），请确认`)
-  const applied = await showTriageModal(items, result.mode)
-  if (!applied) { setHint('自动保存到工作区 .zzwork/inbox.md'); return }
-  await applyTriage(applied, content)
+  if (!items.length) {
+    busy = false
+    setTriageButton('idle')
+    input.readOnly = false
+    input.classList.remove('busy')
+    toast('没有可归类的需求行')
+    setHint('自动保存到工作区 .zzwork/inbox.md')
+    return
+  }
+  try { await reloadTasks() } catch {}
+  setHint(`归类完成（${result.mode === 'llm' ? 'AI' : '关键词'}），请逐条确认`)
+  enterReview(items, input.value)
 }
 
-function showTriageModal(items, mode) {
-  return new Promise((resolve) => {
-    const host = document.getElementById('modal-host')
-    const mask = document.createElement('div')
-    mask.className = 'zz-modal-mask'
+// 按钮三态：idle=归类并执行 / running=运行中(不可点) / cancel=取消(审阅中)
+function setTriageButton(mode) {
+  const btn = $('#triageBtn')
+  const label = $('#triageBtnLabel')
+  if (!btn) return
+  if (label) label.textContent = mode === 'running' ? '运行中' : mode === 'cancel' ? '取消' : '归类并执行'
+  btn.disabled = mode === 'running'
+  btn.classList.toggle('running', mode === 'running')
+  btn.classList.toggle('cancelling', mode === 'cancel')
+}
 
-    const rows = items.map((it, i) => {
-      const action = it.action === 'attach' ? 'attach' : it.action === 'ignore' ? 'ignore' : 'new'
-      const taskOpts = state.tasks.filter((t) => t.scope !== 'board').map((t) => `<option value="${esc(t.id)}" ${t.id === it.taskId ? 'selected' : ''}>${esc(t.name)}</option>`).join('')
-      return `<div class="tri-row" data-i="${i}" data-text="${esc(it.text)}"
-          data-reason="${esc(it.reason || '')}">
-        <div class="txt">${esc(it.text)}</div>
-        <select class="tri-act">
+// 用内联审阅面板就地替换输入框，逐条确认
+function enterReview(items, baseContent) {
+  const input = $('#inboxInput')
+  const panel = $('#inboxReview')
+  if (!input || !panel) return
+  review = { base: baseContent, confirmed: [] }
+  const rows = items.map((it, i) => {
+    const action = it.action === 'attach' ? 'attach' : it.action === 'ignore' ? 'ignore' : 'new'
+    const taskOpts = state.tasks.filter((t) => t.scope !== 'board')
+      .map((t) => `<option value="${esc(t.id)}" ${t.id === it.taskId ? 'selected' : ''}>${esc(t.name)}</option>`).join('')
+    return `<div class="ir-row" data-i="${i}" data-text="${esc(it.text)}">
+      <div class="ir-text">${esc(it.text)}</div>
+      <div class="ir-ctrl">
+        <select class="ir-act">
           <option value="new" ${action === 'new' ? 'selected' : ''}>新建任务</option>
           <option value="attach" ${action === 'attach' ? 'selected' : ''}>归入任务</option>
           <option value="ignore" ${action === 'ignore' ? 'selected' : ''}>忽略</option>
         </select>
-        <div class="tri-target">
-          <input class="tri-name" value="${esc(it.name || it.text.slice(0, 40))}" placeholder="新任务名" ${action === 'new' ? '' : 'style="display:none"'}>
-          <select class="tri-task" ${action === 'attach' ? '' : 'style="display:none"'}>
-            ${taskOpts || '<option value="">（暂无任务）</option>'}
-          </select>
-        </div>
-        <div class="sub">
-          <span class="tri-reason">${esc(it.reason || '')}</span>
-          <span>置信度 ${Math.round((Number(it.confidence) || 0) * 100)}%</span>
-          <select class="tri-scope" style="margin-left:auto;width:120px;${action === 'new' ? '' : 'display:none'}">
-            <option value="long" ${it.scope === 'short' ? '' : 'selected'}>中长期</option>
-            <option value="short" ${it.scope === 'short' ? 'selected' : ''}>短期·看板</option>
-          </select>
-          <select class="tri-type" style="width:100px">
-            <option value="work" ${it.type === 'code' ? '' : 'selected'}>work</option>
-            <option value="code" ${it.type === 'code' ? 'selected' : ''}>code</option>
-          </select>
-          <button class="btn sm tri-only" data-only="${i}" title="只应用这一条">仅应用</button>
-        </div>
-      </div>`
-    }).join('')
-
-    mask.innerHTML = `<div class="zz-modal tr">
-      <div class="mt">需求归类（${mode === 'llm' ? 'AI' : '关键词'}）</div>
-      <div class="mn">新建可设为中长期任务或短期看板卡片，或归入已有任务；可逐条「仅应用」或底部「全部确认」。确认后的行会从便签删除。</div>
-      <div class="tri-rows">${rows}</div>
-      <div class="tri-foot">
-        <label class="mf inline" style="margin:0"><input type="checkbox" id="tri-exec" checked> 立即执行</label>
-        <span class="sp"></span>
-        <button class="btn" data-act="cancel">取消</button>
-        <button class="btn pri" data-act="ok">归类并执行</button>
+        <input class="ir-name" value="${esc(it.name || it.text.slice(0, 40))}" placeholder="新任务名" ${action === 'new' ? '' : 'style="display:none"'}>
+        <select class="ir-task" ${action === 'attach' ? '' : 'style="display:none"'}>${taskOpts || '<option value="">（暂无任务）</option>'}</select>
+        <select class="ir-scope" ${action === 'new' ? '' : 'style="display:none"'}>
+          <option value="long" ${it.scope === 'short' ? '' : 'selected'}>中长期</option>
+          <option value="short" ${it.scope === 'short' ? 'selected' : ''}>短期看板</option>
+        </select>
+        <select class="ir-type" ${action === 'ignore' ? 'style="display:none"' : ''}>
+          <option value="work" ${it.type === 'code' ? '' : 'selected'}>work</option>
+          <option value="code" ${it.type === 'code' ? 'selected' : ''}>code</option>
+        </select>
+        <button class="btn sm pri ir-confirm">${action === 'ignore' ? '保留' : '确认'}</button>
       </div>
+      <div class="ir-reason"><span>${esc(it.reason || '')}</span><span>置信度 ${Math.round((Number(it.confidence) || 0) * 100)}%</span></div>
     </div>`
-
-    const close = (val) => {
-      document.removeEventListener('keydown', onKey, true)
-      mask.remove()
-      resolve(val)
-    }
-    const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close(null) } }
-
-    mask.querySelectorAll('.tri-row').forEach((row) => {
-      const act = row.querySelector('.tri-act')
-      const name = row.querySelector('.tri-name')
-      const task = row.querySelector('.tri-task')
-      const scope = row.querySelector('.tri-scope')
-      act.addEventListener('change', () => {
-        const v = act.value
-        name.style.display = v === 'new' ? '' : 'none'
-        task.style.display = v === 'attach' ? '' : 'none'
-        scope.style.display = v === 'new' ? '' : 'none'
-      })
-      if (act.value === 'attach' && !task.value) {
-        const first = state.tasks.find((t) => t.scope !== 'board')
-        if (first) task.value = first.id
-      }
-    })
-
-    const rowItem = (row) => {
-      const action = row.querySelector('.tri-act').value
-      if (action === 'ignore') return null
-      const text = row.getAttribute('data-text')
-      if (action === 'attach') {
-        const taskId = row.querySelector('.tri-task').value
-        if (!taskId) return null
-        const t = state.tasks.find((x) => x.id === taskId)
-        return { action: 'attach', text, taskId, taskName: t ? t.name : '' }
-      }
-      const name = row.querySelector('.tri-name').value.trim() || text.slice(0, 40)
-      const type = row.querySelector('.tri-type').value
-      const scope = row.querySelector('.tri-scope').value === 'short' ? 'short' : 'long'
-      return { action: 'new', text, name, type, scope }
-    }
-
-    mask.querySelector('[data-act="cancel"]').addEventListener('click', () => close(null))
-    mask.querySelectorAll('.tri-only').forEach((btn) => btn.addEventListener('click', () => {
-      const row = btn.closest('.tri-row')
-      const it = rowItem(row)
-      if (!it) { toast('请先选择目标任务或填写名称'); return }
-      close({ items: [it], execute: mask.querySelector('#tri-exec').checked, confirmedTexts: [it.text] })
-    }))
-    mask.querySelector('[data-act="ok"]').addEventListener('click', () => {
-      const out = []
-      mask.querySelectorAll('.tri-row').forEach((row) => {
-        const it = rowItem(row)
-        if (it) out.push(it)
-      })
-      if (!out.length) { toast('没有需要应用的需求'); return }
-      close({ items: out, execute: mask.querySelector('#tri-exec').checked, confirmedTexts: out.map((x) => x.text) })
-    })
-
-    mask.addEventListener('mousedown', (e) => { if (e.target === mask) close(null) })
-    document.addEventListener('keydown', onKey, true)
-    host.appendChild(mask)
-    refreshIcons()
-  })
+  }).join('')
+  panel.innerHTML = `
+    <div class="ir-head">归类结果 · 逐条确认（确认后该行从便签移除；右上角「取消」保留未确认内容）</div>
+    <div class="ir-rows">${rows}</div>
+    <div class="ir-foot">
+      <label class="mf inline" style="margin:0"><input type="checkbox" id="ir-exec" checked> 立即执行</label>
+      <span class="sp"></span>
+      <span id="irCount" class="hint"></span>
+    </div>`
+  panel.querySelectorAll('.ir-row').forEach((row) => wireReviewRow(row))
+  updateReviewCount()
+  input.style.display = 'none'
+  panel.hidden = false
+  setTriageButton('cancel')
+  refreshIcons()
 }
 
-async function applyTriage(payload, content) {
-  const btn = $('#triageBtn')
-  if (btn) btn.disabled = true
-  setHint('正在应用…')
+function wireReviewRow(row) {
+  const act = row.querySelector('.ir-act')
+  const name = row.querySelector('.ir-name')
+  const task = row.querySelector('.ir-task')
+  const scope = row.querySelector('.ir-scope')
+  const type = row.querySelector('.ir-type')
+  const cbtn = row.querySelector('.ir-confirm')
+  act.addEventListener('change', () => {
+    const v = act.value
+    name.style.display = v === 'new' ? '' : 'none'
+    task.style.display = v === 'attach' ? '' : 'none'
+    scope.style.display = v === 'new' ? '' : 'none'
+    type.style.display = v === 'ignore' ? 'none' : ''
+    if (cbtn) cbtn.textContent = v === 'ignore' ? '保留' : '确认'
+    if (v === 'attach' && !task.value) {
+      const first = state.tasks.find((t) => t.scope !== 'board')
+      if (first) task.value = first.id
+    }
+  })
+  if (act.value === 'attach' && !task.value) {
+    const first = state.tasks.find((t) => t.scope !== 'board')
+    if (first) task.value = first.id
+  }
+  cbtn.addEventListener('click', () => confirmReviewRow(row))
+}
+
+function reviewRowItem(row) {
+  const action = row.querySelector('.ir-act').value
+  const text = row.getAttribute('data-text')
+  if (action === 'ignore') return { ignore: true, text }
+  if (action === 'attach') {
+    const taskId = row.querySelector('.ir-task').value
+    if (!taskId) return { error: '请选择目标任务' }
+    const t = state.tasks.find((x) => x.id === taskId)
+    return { action: 'attach', text, taskId, taskName: t ? t.name : '' }
+  }
+  const name = row.querySelector('.ir-name').value.trim() || text.slice(0, 40)
+  const type = row.querySelector('.ir-type').value
+  const scope = row.querySelector('.ir-scope').value === 'short' ? 'short' : 'long'
+  return { action: 'new', text, name, type, scope }
+}
+
+async function confirmReviewRow(row) {
+  const it = reviewRowItem(row)
+  if (it.error) { toast(it.error); return }
+  if (it.ignore) { row.remove(); updateReviewCount(); maybeFinishReview(); return }
+  const cbtn = row.querySelector('.ir-confirm')
+  if (cbtn) cbtn.disabled = true
+  const execute = $('#ir-exec') ? $('#ir-exec').checked : true
+  let r
   try {
-    const r = await inboxInvoke('apply', { items: payload.items, execute: payload.execute !== false })
-    const ok = (r.results || []).filter((x) => x.ok)
-    const fail = (r.results || []).filter((x) => !x.ok)
-    await reloadTasks()
-    emit('tasks-changed')
-    const created = ok.filter((x) => x.action === 'new' && x.scope !== 'short').length
-    const short = ok.filter((x) => x.scope === 'short').length
-    const attached = ok.filter((x) => x.action === 'attach').length
-    toast(`已处理 ${ok.length} 条：新建 ${created}${short ? ' · 看板 ' + short : ''} · 归入 ${attached}${fail.length ? ' · 失败 ' + fail.length : ''}`, fail.length ? 'err' : 'info', 4000)
-    if (fail.length) console.warn('[inbox] 失败项', fail)
-    // 只删除已确认应用的行，未确认的保留在便签里
-    const input = $('#inboxInput')
-    const removed = payload.confirmedTexts || []
-    const remaining = removeConfirmedLines(input ? input.value : content, removed)
-    if (input) input.value = remaining
-    await inboxInvoke('save', { content: remaining })
-    setHint(remaining.trim() ? `已应用，便签移除 ${removed.length} 条` : '已应用，便签已清空')
-    renderInboxBoard()
-    renderInboxCode()
-    const first = ok.find((x) => x.taskId && x.sessionId)
-    if (first) emit('open-session', { taskId: first.taskId, sessionId: first.sessionId || '' })
+    r = await inboxInvoke('apply', { items: [it], execute })
   } catch (e) {
     toast('应用失败：' + e.message, 'err', 4000)
-    setHint('应用失败：' + e.message)
-  } finally {
-    if (btn) btn.disabled = false
+    if (cbtn) cbtn.disabled = false
+    return
   }
+  const ok = (r.results || []).find((x) => x.ok)
+  const fail = (r.results || []).find((x) => !x.ok)
+  if (!ok || fail) {
+    toast('应用失败' + (fail && fail.error ? '：' + fail.error : ''), 'err', 4000)
+    if (cbtn) cbtn.disabled = false
+    return
+  }
+  review.confirmed.push(it.text)
+  try { await reloadTasks() } catch {}
+  emit('tasks-changed')
+  renderInboxBoard()
+  renderInboxCode()
+  toast('已确认：' + (ok.taskName || it.text))
+  row.remove()
+  updateReviewCount()
+  maybeFinishReview()
+}
+
+function updateReviewCount() {
+  const el = $('#irCount')
+  const panel = $('#inboxReview')
+  if (!el || !panel) return
+  const n = panel.querySelectorAll('.ir-row').length
+  el.textContent = n ? `剩余 ${n} 条待确认` : ''
+}
+
+function maybeFinishReview() {
+  const panel = $('#inboxReview')
+  if (!panel || panel.hidden) return
+  if (panel.querySelectorAll('.ir-row').length === 0) finishReview({ cancelled: false })
+}
+
+// 回到输入框：已确认的行从便签删除，未确认的保留
+function finishReview({ cancelled } = {}) {
+  const input = $('#inboxInput')
+  const panel = $('#inboxReview')
+  const base = review ? review.base : (input ? input.value : '')
+  const confirmed = review ? review.confirmed : []
+  const remaining = removeConfirmedLines(base, confirmed)
+  if (input) { input.value = remaining; input.style.display = ''; input.readOnly = false; input.classList.remove('busy') }
+  if (panel) { panel.hidden = true; panel.innerHTML = '' }
+  review = null
+  busy = false
+  setTriageButton('idle')
+  inboxInvoke('save', { content: remaining }).catch(() => {})
+  const left = remaining.split(/\r?\n/).map((s) => s.trim()).filter(Boolean).length
+  if (left) setHint(`便签保留 ${left} 条待处理`)
+  else setHint(cancelled ? '已取消，便签已无待处理项' : '便签已清空，可继续记录新需求')
 }

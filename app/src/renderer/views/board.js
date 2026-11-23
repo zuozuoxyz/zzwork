@@ -8,8 +8,8 @@ import { toast } from '../components/toast.js'
 
 const boardInvoke = (m, p) => invoke('board', m, p || {})
 
-// 允许拖动的列 → 目标列：未开始→进行中（开始，AI 自动作答），待审核→已完成（归档）
-const DRAG_TARGET = { todo: 'doing', review: 'done' }
+// 允许拖动的列 → 允许的目标列：未开始→进行中（开始，AI 自动作答）或直接→已完成（归档），待审核→已完成（归档），已完成→待审核（打回）
+const DRAG_TARGET = { todo: ['doing', 'done'], review: ['done'], done: ['review'] }
 let dragId = null
 
 export function initBoardView() {
@@ -59,7 +59,8 @@ function onDragOver(e) {
   if (!dragId) return
   const card = state.boardCards.find((c) => c.id === dragId)
   const col = e.target.closest && e.target.closest('.bcol[data-col]')
-  if (!card || !col || DRAG_TARGET[card.status] !== col.getAttribute('data-col')) { clearDropHl(); return }
+  const allowed = card && DRAG_TARGET[card.status]
+  if (!card || !col || !allowed || !allowed.includes(col.getAttribute('data-col'))) { clearDropHl(); return }
   e.preventDefault()
   if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
   const bodyEl = col.querySelector('.bcolb')
@@ -75,11 +76,13 @@ function onDrop(e) {
   const card = state.boardCards.find((c) => c.id === dragId)
   const col = e.target.closest && e.target.closest('.bcol[data-col]')
   const target = col && col.getAttribute('data-col')
+  const allowed = card && DRAG_TARGET[card.status]
   clearDrag()
-  if (!card || !target || DRAG_TARGET[card.status] !== target) return
+  if (!card || !target || !allowed || !allowed.includes(target)) return
   e.preventDefault()
   if (target === 'doing') startCard(card, { openChat: false }).catch((err) => toast(err.message, 'err'))
   else if (target === 'done') finishCard(card).catch((err) => toast(err.message, 'err'))
+  else if (target === 'review') reopenCard(card).catch((err) => toast(err.message, 'err'))
 }
 
 export async function renderBoard() {
@@ -218,6 +221,11 @@ async function startCard(card, opts = {}) {
 
 async function finishCard(card) {
   try { await boardInvoke('finish', { id: card.id }); await renderBoard() } catch (e) { toast(e.message, 'err') }
+}
+
+// 已完成打回待审核：直接改状态，不重新作答
+async function reopenCard(card) {
+  try { await store('tasks.update', { id: card.id, patch: { status: 'review' } }); await renderBoard() } catch (e) { toast(e.message, 'err') }
 }
 
 async function openCard(card) {

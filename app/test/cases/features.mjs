@@ -231,15 +231,22 @@ export default [
       assert.ok(fs.readFileSync(inboxFile, 'utf8').includes('做一个全新的功能界面'))
 
       await app.click('#triageBtn')
-      await app.waitFor(() => !!document.querySelector('.zz-modal.tr'), 8000, '归类弹窗出现')
-      await app.waitFor(`document.querySelectorAll('.tri-row').length === 2`, 8000, '两行归类')
-      const acts = await app.call(() => [...document.querySelectorAll('.tri-row .tri-act')].map((s) => s.value))
+      await app.waitFor(() => { const r = document.querySelector('#inboxReview'); return !!r && !r.hidden }, 8000, '内联审阅出现')
+      await app.waitFor(`document.querySelectorAll('#inboxReview .ir-row').length === 2`, 8000, '两行归类')
+      // 输入框被审阅面板替换
+      assert.equal(await app.call(() => document.querySelector('#inboxInput').style.display), 'none', '输入框被审阅面板替换')
+      const acts = await app.call(() => [...document.querySelectorAll('#inboxReview .ir-row .ir-act')].map((s) => s.value))
       assert.deepEqual(acts, ['attach', 'new'])
-      const attachSel = await app.call(() => document.querySelector('.tri-row .tri-task').value)
+      const attachSel = await app.call(() => document.querySelector('#inboxReview .ir-row .ir-task').value)
       assert.equal(attachSel, ctx.attachTaskId, '归入任务应选中已有任务')
-      await app.call(() => { document.querySelector('#tri-exec').checked = false; return true })
-      await app.click('.zz-modal.tr [data-act="ok"]')
-      await app.waitGone('.zz-modal.tr', 8000)
+      await app.call(() => { const c = document.querySelector('#ir-exec'); if (c) c.checked = false; return true })
+      // 逐条确认：第一条（归入任务）
+      await app.click('#inboxReview .ir-row .ir-confirm')
+      await app.waitFor(`document.querySelectorAll('#inboxReview .ir-row').length === 1`, 10000, '确认一条后剩一条')
+      // 第二条（新建任务）→ 全部确认后自动回到输入框
+      await app.click('#inboxReview .ir-row .ir-confirm')
+      await app.waitFor(`document.querySelector('#inboxReview').hidden === true`, 10000, '全部确认后回到输入框')
+      await app.waitFor(`document.querySelector('#inboxInput').style.display !== 'none'`, 5000, '输入框恢复')
 
       await app.waitFor(`(async () => {
         const ts = await window.zzwork.invoke('store', 'tasks.list')
@@ -257,6 +264,50 @@ export default [
       assert.ok(info.includes('便签已有任务 请补充日志'), '归入任务应追加需求')
       assert.equal(fs.readFileSync(inboxFile, 'utf8'), '', '应用后便签应清空')
 
+      await app.call(() => { const x = document.querySelector('.tab[data-pane="inbox"] .x'); if (x) x.click(); return true })
+      await app.waitFor(`!document.querySelector('.tab[data-pane="inbox"]')`, 5000, '便签 tab 关闭')
+    }
+  },
+  {
+    name: '便签归类逐条确认：确认一条后取消，已确认行删除、未确认保留',
+    async run(app) {
+      await ensureServer(app)
+      const workdir = await app.store('workdir.get')
+      const inboxFile = path.join(workdir, '.zzwork', 'inbox.md')
+      await bindTask(app, '便签取消目标任务', {})
+      await selectTask(app, '便签取消目标任务')
+      await app.click('.abi[data-view="projects"]')
+      await app.waitFor(() => !!document.querySelector('#inboxInput'), 5000, '便签输入框出现')
+      await app.click('#openInboxBtn')
+      await app.waitFor(`document.querySelector('#pane-inbox').classList.contains('on')`, 5000, '便签打开')
+
+      const lines = ['取消甲需求qx', '取消乙需求bv', '取消丙需求cc']
+      await app.setValue('#inboxInput', lines.join('\n'))
+      await sleep(900)
+
+      await app.click('#triageBtn')
+      await app.waitFor(`document.querySelectorAll('#inboxReview .ir-row').length === 3`, 8000, '三行归类')
+      await app.call(() => { const c = document.querySelector('#ir-exec'); if (c) c.checked = false; return true })
+
+      // 确认第一条（应用并从便签移除）
+      await app.click('#inboxReview .ir-row .ir-confirm')
+      await app.waitFor(`document.querySelectorAll('#inboxReview .ir-row').length === 2`, 10000, '确认一条后剩两条')
+
+      // 审阅中右上角按钮变为「取消」，点击回到输入框
+      const lbl = await app.call(() => (document.querySelector('#triageBtnLabel') || {}).textContent)
+      assert.equal(lbl, '取消', '审阅中按钮应显示取消')
+      await app.click('#triageBtn')
+      await app.waitFor(`document.querySelector('#inboxReview').hidden === true`, 8000, '取消后回到输入框')
+
+      const remaining = await app.call(() => document.querySelector('#inboxInput').value)
+      assert.ok(!remaining.includes(lines[0]), '已确认的甲需求应从便签删除')
+      assert.ok(remaining.includes(lines[1]) && remaining.includes(lines[2]), '未确认的乙丙需求应保留')
+      await sleep(500)
+      assert.equal(fs.readFileSync(inboxFile, 'utf8'), lines[1] + '\n' + lines[2], '便签文件同步保留剩余行')
+
+      // 清理
+      await app.setValue('#inboxInput', '')
+      await sleep(700)
       await app.call(() => { const x = document.querySelector('.tab[data-pane="inbox"] .x'); if (x) x.click(); return true })
       await app.waitFor(`!document.querySelector('.tab[data-pane="inbox"]')`, 5000, '便签 tab 关闭')
     }

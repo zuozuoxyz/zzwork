@@ -185,6 +185,7 @@
   border: 1px solid var(--bd2); border-radius: 8px; color: var(--fg); font-size: 12.5px;
   font-family: inherit; padding: 10px 12px; outline: none; line-height: 1.6 }
 #zzv #inboxInput:focus { border-color: var(--accent) }
+#zzv #inboxInput.busy { opacity: .65; cursor: default }
 
 /* 任务信息：简介、记忆、会话列表 */
 #zzv .briefcell { max-width: 720px; margin-bottom: 4px }
@@ -196,19 +197,29 @@
 #zzv .sessrow .sd { color: var(--faint); font-size: 10.5px }
 #zzv .membox { width: 100%; max-width: 720px; min-height: 76px; margin-bottom: 6px }
 
-/* 归类确认弹窗 */
-#zzv .zz-modal.tr { width: 760px; max-width: 94vw }
-#zzv .tri-row { display: grid; grid-template-columns: 1fr 118px 190px; gap: 8px; align-items: center;
-  border-top: 1px solid var(--bd); padding: 8px 0; font-size: 12px }
-#zzv .tri-row .txt { color: var(--fg); word-break: break-word }
-#zzv .tri-row input, #zzv .tri-row select { height: 26px; border-radius: 5px; background: var(--bg);
-  border: 1px solid var(--bd2); color: var(--fg); font-size: 11.5px; padding: 0 6px;
-  font-family: inherit; outline: none; width: 100% }
-#zzv .tri-row .sub { grid-column: 1 / -1; display: flex; gap: 6px; align-items: center;
-  color: var(--faint); font-size: 10.5px }
-#zzv .tri-foot { display: flex; align-items: center; gap: 10px; margin-top: 10px;
+/* 便签归类：内联逐条确认（就地替换输入框） */
+#zzv .inboxreview { flex: 1; min-height: 0; margin-top: 10px; display: flex; flex-direction: column }
+#zzv .inboxreview[hidden] { display: none }
+#zzv .inboxreview .ir-head { font-size: 11px; color: var(--dim); padding-bottom: 8px }
+#zzv .inboxreview .ir-rows { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 8px }
+#zzv .inboxreview .ir-row { border: 1px solid var(--bd); background: var(--card2); border-radius: 7px;
+  padding: 9px 11px; display: flex; flex-direction: column; gap: 7px }
+#zzv .inboxreview .ir-text { font-size: 12.5px; color: var(--fg); word-break: break-word; line-height: 1.5 }
+#zzv .inboxreview .ir-ctrl { display: flex; flex-wrap: wrap; gap: 6px; align-items: center }
+#zzv .inboxreview .ir-ctrl select, #zzv .inboxreview .ir-ctrl input { height: 26px; border-radius: 5px;
+  background: var(--bg); border: 1px solid var(--bd2); color: var(--fg); font-size: 11.5px;
+  padding: 0 6px; font-family: inherit; outline: none }
+#zzv .inboxreview .ir-act { width: 96px }
+#zzv .inboxreview .ir-name { flex: 1; min-width: 120px }
+#zzv .inboxreview .ir-task { width: 150px }
+#zzv .inboxreview .ir-scope, #zzv .inboxreview .ir-type { width: 92px }
+#zzv .inboxreview .ir-confirm { margin-left: auto }
+#zzv .inboxreview .ir-reason { display: flex; gap: 10px; color: var(--faint); font-size: 10.5px }
+#zzv .inboxreview .ir-foot { display: flex; align-items: center; gap: 10px; margin-top: 8px;
   font-size: 11px; color: var(--dim) }
-#zzv .tri-foot .sp { flex: 1 }
+#zzv .inboxreview .ir-foot .sp { flex: 1 }
+#zzv #triageBtn.running { opacity: .65; cursor: default }
+#zzv #triageBtn.cancelling { color: var(--warn); border-color: var(--bd2) }
 
 /* 本次对话 diff 卡片 */
 #zzv .diffbox { border: 1px solid var(--bd); background: var(--card); border-radius: 7px;
