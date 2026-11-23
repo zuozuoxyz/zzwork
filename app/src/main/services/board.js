@@ -5,6 +5,9 @@ const os = require('os')
 const { getStore } = require('./store')
 const chat = require('./chat')
 
+// taskId -> 当前进行中的 runId（用于手动停止；重启后由 resumeAll 重新填充）
+const activeRuns = new Map()
+
 function workRoot() {
   const S = getStore()
   return S.workdir || path.join(os.homedir(), 'zzwork-tasks')
@@ -123,9 +126,13 @@ async function start(p) {
     const content = readMeta(task).content || ''
     const r = await chat.send({
       taskId: task.id, sessionId: session.id, text: `【任务】${task.name}\n【内容】${content}`,
-      onFinish: ({ status }) => { if (status === 'done') toReview(task.id) }
+      onFinish: ({ status }) => {
+        if (status === 'done') toReview(task.id)
+        if (activeRuns.get(task.id) === runId) activeRuns.delete(task.id)
+      }
     })
     runId = (r && r.runId) || ''
+    if (runId) activeRuns.set(task.id, runId)
   }
   return { ok: true, taskId: task.id, sessionId: session.id, runId }
 }
@@ -136,11 +143,66 @@ async function sendMessage(p) {
   const task = S.getTask(p && p.id)
   if (!task) throw new Error('卡片不存在')
   if (task.status !== 'doing') S.updateTask(task.id, { status: 'doing' })
+  let runId = ''
   const r = await chat.send({
     taskId: task.id, sessionId: p.sessionId, text: p.text,
-    onFinish: ({ status }) => { if (status === 'done') toReview(task.id) }
+    onFinish: ({ status }) => {
+      if (status === 'done') toReview(task.id)
+      if (activeRuns.get(task.id) === runId) activeRuns.delete(task.id)
+    }
   })
-  return { ok: true, runId: (r && r.runId) || '', sessionId: (r && r.sessionId) || (p.sessionId || '') }
+  runId = (r && r.runId) || ''
+  if (runId) activeRuns.set(task.id, runId)
+  return { ok: true, runId, sessionId: (r && r.sessionId) || (p.sessionId || '') }
+}
+
+// 手动停止进行中的卡片：终止当前运行并转入待审核（停止≠完成，交用户审核）
+function stop(p) {
+  const S = getStore()
+  const task = S.getTask(p && p.id)
+  if (!task) throw new Error('卡片不存在')
+  let runId = activeRuns.get(task.id) || ''
+  if (!runId) {
+    const running = (S.listRuns(task.id) || []).find((r) => r.status === 'running')
+    if (running) runId = running.id
+  }
+  if (runId) { try { chat.stop(runId) } catch {} }
+  activeRuns.delete(task.id)
+  if ((task.scope || 'long') === 'board' && task.status === 'doing') S.updateTask(task.id, { status: 'review' })
+  return { ok: true, runId }
+}
+
+// 应用重启后，把被迫中断的「进行中」卡片自动续跑（有历史就续跑，没有就重跑首轮）
+async function resumeBoardTask(task) {
+  const S = getStore()
+  const session = S.ensureSession(task.id)
+  const msgs = S.listMessages(task.id, session.id)
+  const text = msgs.length
+    ? '（应用上次被中断，现已重启）请从中断处继续完成该任务，直接给出结论，不要询问。'
+    : `【任务】${task.name}\n【内容】${readMeta(task).content || ''}`
+  let runId = ''
+  const r = await chat.send({
+    taskId: task.id, sessionId: session.id, text,
+    onFinish: ({ status }) => {
+      if (status === 'done') toReview(task.id)
+      if (activeRuns.get(task.id) === runId) activeRuns.delete(task.id)
+    }
+  })
+  runId = (r && r.runId) || ''
+  if (runId) activeRuns.set(task.id, runId)
+  return runId
+}
+
+// 启动时调用一次：续跑所有进行中的看板卡片
+async function resumeAll() {
+  const S = getStore()
+  let list = []
+  try { list = S.listTasks() || [] } catch { return 0 }
+  const doing = list.filter((t) => (t.scope || 'long') === 'board' && t.status === 'doing')
+  for (const task of doing) {
+    try { await resumeBoardTask(task) } catch (e) { console.error('[zzwork] 看板任务自动恢复失败:', e.message) }
+  }
+  return doing.length
 }
 
 function finish(p) {
@@ -166,6 +228,8 @@ module.exports = {
   start,
   send: sendMessage,
   finish,
+  stop,
+  resumeAll,
   session,
   register(ipcMain) {
     ipcMain.handle('zz:board:config', () => readConfig())
@@ -176,6 +240,8 @@ module.exports = {
     ipcMain.handle('zz:board:start', (_e, p) => start(p))
     ipcMain.handle('zz:board:send', (_e, p) => sendMessage(p))
     ipcMain.handle('zz:board:finish', (_e, p) => finish(p))
+    ipcMain.handle('zz:board:stop', (_e, p) => stop(p))
+    ipcMain.handle('zz:board:resumeAll', () => resumeAll())
     ipcMain.handle('zz:board:session', (_e, p) => session(p))
   }
 }

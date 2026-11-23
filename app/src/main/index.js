@@ -68,6 +68,10 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(() => {
     registerAll(require('electron').ipcMain, () => win)
     createWindow()
+    // 看板中被强制退出而中断的「进行中」卡片，启动后自动续跑
+    try {
+      require('./services/board').resumeAll().catch((e) => console.error('[zzwork] 看板自动恢复失败：' + e.message))
+    } catch (e) { console.error('[zzwork] 看板自动恢复异常：' + e.message) }
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
     })

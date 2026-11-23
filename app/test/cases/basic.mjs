@@ -40,5 +40,22 @@ export default [
       const envs = await app.store('envs.list')
       assert.ok(envs.some((e) => e.id === 'local' && e.kind === 'local'))
     }
+  },
+  {
+    name: '侧栏导航默认详情：环境显示本机、空分类不显示详情',
+    async run(app) {
+      // 环境永远包含本机，点击导航应默认打开本机详情
+      await app.click('.abi[data-view="envs"]')
+      await app.waitFor(() => document.querySelector('#pane-item').classList.contains('on'), 5000, '环境详情页打开')
+      const envText = await app.text('#itemBody')
+      assert.ok(envText.includes('本机'), '应默认显示本机环境：' + envText.slice(0, 60))
+      // 初创状态模型提供方为空：点击模型不应打开详情页（不显示详情 tab）
+      const providers = await app.store('providers.list')
+      if (!providers.length) {
+        await app.click('.abi[data-view="models"]')
+        await app.waitFor(() => !document.querySelector('#pane-item').classList.contains('on'), 5000, '空分类不显示详情页')
+      }
+      await app.click('.abi[data-view="projects"]')
+    }
   }
 ]

@@ -51,7 +51,7 @@ export function initUpdate() {
     } else if (ev.type === 'installing') {
       busy = true
       render(`正在安装 ${info ? info.latest : ''}…`)
-      toast(`正在安装 ${info ? info.latest : '新版本'}，应用即将重启…`, 'info', 6000)
+      toast(`已下载 ${info ? info.latest : '新版本'}，正在打开安装程序，按提示完成即可（完成后会自动重启）`, 'info', 10000)
     } else if (ev.type === 'manual') {
       busy = false
       render()

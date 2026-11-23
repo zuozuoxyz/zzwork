@@ -259,6 +259,20 @@ async function pickAgentModel(S, task, session, opts = {}) {
       || agents.find((a) => a.kind === 'builtin')
       || FALLBACK_AGENT
   }
+  // 看板卡片以「看板配置」的执行体为准：卡片可能残留创建时的旧 agent_id='builtin'
+  // （纯聊天模型没有 shell/工具，会把模型的工具调用标记当正文吐出来）。
+  // 配置了可用执行体就用它；未配置时，若当前是 builtin 则升级到工具型 CLI。
+  if (task && task.scope === 'board') {
+    let boardAgentId = ''
+    try { boardAgentId = (JSON.parse(S.getSetting('board.config', '') || '{}') || {}).agent_id || '' } catch {}
+    const configured = boardAgentId ? agents.find((a) => a.id === boardAgentId) : null
+    if (configured && agentUsable(configured, available)) {
+      agent = configured
+    } else if (agent.kind === 'builtin') {
+      const cli = usableAgents.find((a) => a.kind !== 'builtin')
+      if (cli) agent = cli
+    }
+  }
   // 绑定在目标环境不可用的执行体时，落定回退结果，避免每次会话都重新猜测
   const taskAgent = agents.find((a) => a.id === (task && task.agent_id))
   const fallbackFrom = taskAgent && !agentUsable(taskAgent, available) && taskAgent.id !== agent.id ? taskAgent : null
@@ -1093,7 +1107,8 @@ async function runBuiltin({ runId, task, session, agent, model, changes: ch, env
     if (last) last.content = buildUserContent(last.content, attachments, modelLike(S, model).type)
   }
   const sys = await buildSystem(S, task, session)
-  const canAsk = depth < ASK_MAX_DEPTH
+  // 看板卡片任务不询问：没人坐等回答，问题只会卡住。看板任务把待确认的问题作为结论输出，卡片转待审核
+  const canAsk = depth < ASK_MAX_DEPTH && (task.scope || 'long') !== 'board'
   // 易变的看板/工作区变更/跨任务清单拼到最后一条用户消息，system 保持稳定以命中前缀缓存
   appendTailToLast(history, buildTurnTail(S, task, ch && ch.text ? ch.text : '', canAsk))
   let acc = ''
@@ -1206,7 +1221,7 @@ async function runCli({ runId, task, session, agent, changes: ch, prompt, env, t
   const S = getStore()
   const post2 = (o) => post({ taskId: task.id, sessionId: session.id, runId, ...o })
   const meta = { ...parseMeta(task.meta), ...parseMeta(session.meta) }
-  const canAsk = depth < ASK_MAX_DEPTH
+  const canAsk = depth < ASK_MAX_DEPTH && (task.scope || 'long') !== 'board'
   let selection = { skills: [], mcps: [] }
   try {
     const tenv = env || resolveTaskEnv(S, task)
@@ -1221,6 +1236,10 @@ async function runCli({ runId, task, session, agent, changes: ch, prompt, env, t
 
   const extraParts = []
   if (task.brief) extraParts.push('【任务简介】\n' + task.brief.slice(0, 2000))
+  // 看板任务：无人实时坐等，禁止交互式提问；待确认的问题作为结论输出，回合结束后卡片转待审核
+  if ((task.scope || 'long') === 'board') {
+    extraParts.push('【看板任务约束】这是看板自动执行的任务，没有用户实时坐等回答，不要使用任何交互式提问工具。若遇到必须由用户确认/决策的问题，直接把问题本身与你的建议结论写清楚作为回复输出，然后结束本轮；系统会把卡片转「待审核」，由用户在卡片上处理。')
+  }
   const mem = await readMemory(task)
   if (mem) extraParts.push('【任务记忆】\n' + mem.slice(0, 2000))
   if (session.summary) extraParts.push('【会话摘要】\n' + session.summary)

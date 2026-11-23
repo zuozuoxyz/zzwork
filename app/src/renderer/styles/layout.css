@@ -345,7 +345,12 @@
 #zzv .bcard.doing { border-left: 3px solid #38bdf8 }
 #zzv .bcard.review { border-left: 3px solid #d29922 }
 #zzv .bcard.done { opacity: .82 }
-#zzv .bcard .bct { font-size: 12.5px; color: var(--fg); font-weight: 500; word-break: break-word }
+#zzv .bcard .bct { font-size: 12.5px; color: var(--fg); font-weight: 500; word-break: break-word;
+  display: flex; align-items: flex-start; gap: 6px }
+#zzv .bcard .bstop { margin-left: auto; flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 18px; height: 18px; padding: 0; border-radius: 4px; border: 1px solid var(--bd);
+  background: transparent; color: var(--dim); cursor: pointer }
+#zzv .bcard .bstop:hover { color: #f87171; border-color: #f87171; background: rgba(248,113,113,.08) }
 #zzv .bcard .bcc { margin-top: 5px; font-size: 11px; color: var(--dim); line-height: 1.5;
   white-space: pre-wrap; word-break: break-word }
 #zzv .bcard .bcc.empty { color: var(--faint); font-style: italic }

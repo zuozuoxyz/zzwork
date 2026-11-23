@@ -1,9 +1,8 @@
-// 版本更新：查 GitHub 最新 Release → 下载安装包 → 静默升级并重启
+// 版本更新：查 GitHub 最新 Release → 下载安装包 → 交给系统 shell 启动安装程序（安装后自动拉起新版本）
 // 用 releases/latest 的跳转地址取版本号，避开 GitHub API 的匿名频率限制
 const { app, net, shell, BrowserWindow } = require('electron')
 const path = require('path')
 const fs = require('fs')
-const { spawn } = require('child_process')
 
 const REPO = 'zuozuoxyz/zzwork'
 const LATEST_URL = `https://github.com/${REPO}/releases/latest`
@@ -124,10 +123,13 @@ function download(url, file) {
         broadcast({ type: 'progress', percent: pct, version: info && info.version })
       })
       res.on('error', fail)
+      res.on('aborted', () => fail(new Error('下载中断')))
       res.pipe(out)
       out.on('error', fail)
       out.on('finish', () => {
         if (done) return
+        // 连接中途断开时 content-length 与实际写入不符，避免把残缺安装包当成功
+        if (total && received !== total) return fail(new Error(`安装包不完整（${received}/${total}）`))
         done = true
         out.close(() => {
           percent = 100
@@ -141,19 +143,21 @@ function download(url, file) {
   })
 }
 
-function installWin(setup) {
-  // 便携版运行时 execPath 在临时目录，安装后改从默认安装位置拉起
-  const tempRoot = path.join(app.getPath('temp'), 'zzwork-update')
-  const installed = path.join(process.env.LOCALAPPDATA || '', 'Programs', 'zzwork', 'zzwork.exe')
-  const fromTemp = process.execPath.toLowerCase().startsWith(tempRoot.toLowerCase())
-  const relaunch = fromTemp && fs.existsSync(installed) ? installed : process.execPath
-  const q = (s) => String(s).replace(/'/g, "''")
-  // 由独立进程等待静默安装结束再拉起新版本，避免本进程退出后无人重启
-  const ps = `Start-Process -FilePath '${q(setup)}' -ArgumentList '/S' -Wait; Start-Sleep -Milliseconds 1500; Start-Process -FilePath '${q(relaunch)}'`
-  spawn('powershell.exe', ['-NoProfile', '-WindowStyle', 'Hidden', '-Command', ps], {
-    detached: true, stdio: 'ignore', windowsHide: true
-  }).unref()
-  setTimeout(() => app.quit(), 400)
+async function installWin(setup) {
+  // 关键：安装包必须由「不属于 zzwork 进程树」的方式启动。
+  // 之前用 detached powershell 拉起安装包，但本进程退出时整棵子进程树会被回收，
+  // 在 powershell 真正执行 Start-Process 之前就跟着退出（杀软拖慢 powershell 启动时更明显），
+  // 表现就是「下载完自动关闭后什么都不发生」。改由系统 shell(ShellExecute) 启动安装包，
+  // 让安装程序立刻、独立地跑起来，再退出本进程让出文件锁。
+  // 安装器是 assisted 安装（electron-builder oneClick:false），安装完成后会自动拉起新版本。
+  const err = await shell.openPath(setup).catch((e) => String((e && e.message) || e))
+  if (err) {
+    broadcast({ type: 'error', message: '启动安装程序失败：' + err })
+    return false
+  }
+  // 先让安装窗口弹出，再退出以释放文件锁；避免「应用关了但安装器还没起来」的观感
+  setTimeout(() => { try { app.quit() } catch {} }, 1200)
+  return true
 }
 
 async function install() {
@@ -180,7 +184,8 @@ async function install() {
   downloading = false
   if (process.platform === 'win32') {
     broadcast({ type: 'installing', version })
-    installWin(file)
+    const ok = await installWin(file)
+    if (!ok) return { ok: false, reason: 'install', message: '启动安装程序失败' }
   } else {
     // macOS 未签名，无法静默替换：挂载 dmg 让用户拖入「应用程序」
     try { await shell.openPath(file) } catch {}

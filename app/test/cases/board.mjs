@@ -23,7 +23,7 @@ async function ensureAI(app) {
   const m = (await app.store('models.list')).find((x) => x.name === '看板测试模型')
   ctx.modelId = m && m.id
   await app.invoke('secrets', 'set', { key: 'zzwork.key.provider.' + pid, value: 'sk-board' })
-  await app.invoke('board', 'saveConfig', { model_id: ctx.modelId, agent_id: '', skillExclude: [], mcpExclude: [] })
+  await app.invoke('board', 'saveConfig', { model_id: ctx.modelId, agent_id: 'builtin', skillExclude: [], mcpExclude: [] })
   ctx.ready = true
 }
 
@@ -69,6 +69,22 @@ export default [
     }
   },
   {
+    name: '从看板切到项目：右栏大块同步切走，不残留看板（回归）',
+    async run(app) {
+      await app.click('.abi[data-view="board"]')
+      await app.waitFor(() => document.querySelector('#pane-board').classList.contains('on'), 5000, '看板 pane 打开')
+      await app.click('.abi[data-view="projects"]')
+      await app.waitFor(() => !document.querySelector('#pane-board').classList.contains('on'), 5000, '离开看板后 pane-board 应关闭')
+      const tabs = await app.call(() => document.querySelector('#tabbar').textContent)
+      assert.ok(!tabs.includes('看板'), '离开看板后 tab 条不应残留看板：' + tabs)
+      const anyTaskPane = await app.call(() => ['info', 'session', 'ai', 'file'].some((p) => {
+        const el = document.getElementById('pane-' + p)
+        return !!el && el.classList.contains('on')
+      }))
+      assert.ok(anyTaskPane, '离开看板后右栏应切回任务工作区')
+    }
+  },
+  {
     name: '看板配置：模型/执行体/Skills/MCP 可保存',
     async run(app) {
       await ensureAI(app)
@@ -79,6 +95,12 @@ export default [
       assert.ok(await app.exists('#boardAgentSel'), '执行体下拉')
       assert.ok(await app.exists('#boardSkillToggles'), 'Skills 区')
       assert.ok(await app.exists('#boardMcpToggles'), 'MCP 区')
+      // 执行体下拉只列本机环境里可用的执行体（外加「自动」空选项）
+      const det = await app.invoke('env', 'detect', { id: 'local', kind: 'local' })
+      const okIds = new Set((det.list || []).filter((a) => a.ok).map((a) => a.id))
+      const opts = await app.call(() => [...document.querySelectorAll('#boardAgentSel option')].map((o) => o.value))
+      assert.ok(opts.includes(''), '执行体应有「自动」选项：' + JSON.stringify(opts))
+      for (const v of opts.filter(Boolean)) assert.ok(okIds.has(v), '执行体选项应为本机可用执行体，发现不可用项：' + v)
       // 通过 IPC 保存并回读
       await app.invoke('board', 'saveConfig', { model_id: ctx.modelId, agent_id: 'builtin', skillExclude: ['s1'], mcpExclude: ['m1'] })
       const cfg = await app.invoke('board', 'config')
@@ -87,7 +109,91 @@ export default [
       assert.deepEqual(cfg.skillExclude, ['s1'])
       assert.deepEqual(cfg.mcpExclude, ['m1'])
       // 复位为不裁剪，避免影响后续用例
-      await app.invoke('board', 'saveConfig', { model_id: ctx.modelId, agent_id: '', skillExclude: [], mcpExclude: [] })
+      await app.invoke('board', 'saveConfig', { model_id: ctx.modelId, agent_id: 'builtin', skillExclude: [], mcpExclude: [] })
+    }
+  },
+  {
+    name: '看板卡片以看板配置执行体为准（残留 builtin 也切到配置的 CLI）',
+    async run(app) {
+      await ensureAI(app)
+      // 看板执行体配置为 claude-code
+      await app.invoke('board', 'saveConfig', { model_id: ctx.modelId, agent_id: 'claude-code', skillExclude: [], mcpExclude: [] })
+      // 造一张残留 agent_id='builtin' 的卡片
+      const card = await app.invoke('board', 'create', { title: '执行体覆盖', content: '应以 claude-code 作答' })
+      const c0 = (await boardList(app)).find((x) => x.id === card.id)
+      assert.equal(c0.agent_id, 'builtin', '新建卡片默认落 builtin')
+      // 打开任务时解析到的执行体应为配置的 claude-code，而非残留的 builtin
+      const info = await app.invoke('chat', 'init', { taskId: card.id })
+      assert.equal(info.agentId, 'claude-code', '看板卡片应使用配置的 claude-code，而非残留 builtin')
+      // 收尾：复位为 builtin（假 AI 路径）
+      await app.invoke('board', 'saveConfig', { model_id: ctx.modelId, agent_id: 'builtin', skillExclude: [], mcpExclude: [] })
+    }
+  },
+  {
+    name: '看板任务禁用交互式提问：不弹 AskUserQuestion，直接完成进待审核（回归）',
+    async run(app) {
+      // 执行体配成 claude-code（走真实 CLI，假 claude 会在内容含 [[ASK]] 时发起提问请求）
+      await app.invoke('board', 'saveConfig', { model_id: '', agent_id: 'claude-code', skillExclude: [], mcpExclude: [] })
+      const card = await app.invoke('board', 'create', { title: '看板禁问', content: '[[ASK]]是否删除旧数据，请确认后继续' })
+      await app.invoke('board', 'start', { id: card.id })
+      await app.click('.abi[data-view="board"]')
+      await app.waitFor(() => !!document.querySelector('.boardcols'), 8000, '看板网格')
+      // 关键：看板任务不得卡在提问，应直接完成并进入待审核
+      // （若无禁区，[[ASK]] 会触发提问卡片并一直等待回答，status 会停在 doing，下面的 waitFor 会超时）
+      await app.waitFor(`(async () => {
+        const l = await window.zzwork.invoke('board', 'list')
+        const c = l.find((x) => x.id === ${JSON.stringify(card.id)})
+        return !!(c && c.status === 'review')
+      })()`, 25000, '看板任务应直接完成并进入待审核，而非卡在 AskUserQuestion')
+      await app.invoke('board', 'saveConfig', { model_id: ctx.modelId, agent_id: 'builtin', skillExclude: [], mcpExclude: [] })
+    }
+  },
+  {
+    name: '手动停止进行中卡片：终止运行并转入待审核（回归）',
+    async run(app) {
+      const slow = await startFakeAI({ delay: 5000, respond: () => ['慢速作答不应阻塞停止'] })
+      try {
+        const pid = await app.store('providers.upsert', { provider: { name: '慢速看板提供方', type: 'openai_compatible', base_url: slow.url } })
+        await app.store('models.upsert', { model: { name: '慢速看板模型', model_id: 'board-slow', type: 'openai_compatible', base_url: slow.url, provider_id: pid, is_default: 0 } })
+        const slowModel = ((await app.store('models.list')).find((x) => x.name === '慢速看板模型') || {}).id
+        await app.invoke('secrets', 'set', { key: 'zzwork.key.provider.' + pid, value: 'sk-slow' })
+        await app.invoke('board', 'saveConfig', { model_id: slowModel, agent_id: 'builtin', skillExclude: [], mcpExclude: [] })
+        const card = await app.invoke('board', 'create', { title: '可停止任务', content: '这是一个可以手动停止的慢任务' })
+        const started = await app.invoke('board', 'start', { id: card.id })
+        assert.ok(started.runId, '应启动一个运行')
+        await app.waitFor(`(async () => {
+          const r = await window.zzwork.invoke('store', 'runs.get', { id: ${JSON.stringify(started.runId)} })
+          return !!(r && r.status === 'running')
+        })()`, 8000, '运行进入 running')
+        const res = await app.invoke('board', 'stop', { id: card.id })
+        assert.ok(res && res.ok, '停止应成功')
+        const run = await app.store('runs.get', { id: started.runId })
+        assert.notEqual(run.status, 'running', '停止后运行不应仍在进行')
+        const c = (await boardList(app)).find((x) => x.id === card.id)
+        assert.equal(c.status, 'review', '停止后卡片应转入待审核')
+      } finally {
+        try { await slow.close() } catch {}
+        await app.invoke('board', 'saveConfig', { model_id: ctx.modelId, agent_id: 'builtin', skillExclude: [], mcpExclude: [] })
+      }
+    }
+  },
+  {
+    name: '应用重启后自动续跑进行中的看板卡片（回归）',
+    async run(app) {
+      await ensureAI(app)
+      const card = await app.invoke('board', 'create', { title: '续跑任务', content: '中断后应自动继续完成' })
+      // 模拟被强制退出：状态停在 doing，且已有部分历史
+      await app.store('tasks.update', { id: card.id, patch: { status: 'doing' } })
+      const sess = await app.invoke('board', 'session', { id: card.id })
+      await app.store('messages.add', { taskId: card.id, role: 'user', content: '【任务】续跑任务', opts: { sessionId: sess.sessionId } })
+      // 启动时调用的续跑入口
+      const n = await app.invoke('board', 'resumeAll')
+      assert.ok(n >= 1, '应至少续跑一张进行中卡片：' + n)
+      await app.waitFor(`(async () => {
+        const l = await window.zzwork.invoke('board', 'list')
+        const c = l.find((x) => x.id === ${JSON.stringify(card.id)})
+        return !!(c && c.status === 'review')
+      })()`, 25000, '续跑完成后自动进入待审核')
     }
   },
   {
@@ -299,7 +405,7 @@ export default [
       })
       const m = (await app.store('models.list')).find((x) => x.name === '思考模型')
       await app.invoke('secrets', 'set', { key: 'zzwork.key.provider.' + pid, value: 'sk-think' })
-      await app.invoke('board', 'saveConfig', { model_id: m.id, agent_id: '', skillExclude: [], mcpExclude: [] })
+      await app.invoke('board', 'saveConfig', { model_id: m.id, agent_id: 'builtin', skillExclude: [], mcpExclude: [] })
 
       const card = await app.invoke('board', 'create', { title: '思考任务', content: '需要先思考' })
       await app.invoke('board', 'start', { id: card.id })
@@ -317,7 +423,51 @@ export default [
       await app.waitFor(`[...document.querySelectorAll('#bcMsgs .bmsg.a .md')].some(e=>e.textContent.includes('最终答复'))`, 15000, '作答内容实时显示')
       // 收尾：关闭弹窗、恢复看板配置
       await app.call(() => { document.querySelectorAll('.zz-modal-mask').forEach((x) => x.remove()); return true })
-      await app.invoke('board', 'saveConfig', { model_id: ctx.modelId, agent_id: '', skillExclude: [], mcpExclude: [] })
+      await app.invoke('board', 'saveConfig', { model_id: ctx.modelId, agent_id: 'builtin', skillExclude: [], mcpExclude: [] })
+      try { await server.close() } catch {}
+    }
+  },
+  {
+    name: '打开进行中的卡片：应显示已流式生成的作答且无加载错误（回归）',
+    async run(app) {
+      // 慢速作答：首段先流出，之后长时间静默，保证打开弹窗时 run 仍在进行中
+      const server = await startFakeAI({ chunks: ['第一段已作答', '第二段'], delay: 4000 })
+      const pid = await app.store('providers.upsert', {
+        provider: { name: '进行中提供方', type: 'openai_compatible', base_url: server.url }
+      })
+      await app.store('models.upsert', {
+        model: { name: '进行中模型', model_id: 'doing-1', type: 'openai_compatible', base_url: server.url, provider_id: pid, is_default: 0 }
+      })
+      const m = (await app.store('models.list')).find((x) => x.name === '进行中模型')
+      await app.invoke('secrets', 'set', { key: 'zzwork.key.provider.' + pid, value: 'sk-doing' })
+      await app.invoke('board', 'saveConfig', { model_id: m.id, agent_id: 'builtin', skillExclude: [], mcpExclude: [] })
+
+      const card = await app.invoke('board', 'create', { title: '进行中卡片', content: '慢速作答' })
+      const started = await app.invoke('board', 'start', { id: card.id })
+      const sid = started.sessionId
+      // 等到 run 已流出首段内容（此刻 live 快照非空、run 仍在进行中）
+      await app.waitFor(`(async () => {
+        const info = await window.zzwork.invoke('chat', 'init', { taskId: ${JSON.stringify(card.id)}, sessionId: ${JSON.stringify(sid)} })
+        return !!(info && info.live && String(info.live.content || '').includes('第一段'))
+      })()`, 15000, 'run 已流出首段内容')
+
+      // 打开看板并点击卡片（进行中）
+      await app.click('.abi[data-view="board"]')
+      await app.waitFor(() => !!document.querySelector('.boardcols'), 8000, '看板网格')
+      await app.call((t) => {
+        const c = [...document.querySelectorAll('.bcard')].find((e) => e.textContent.includes(t))
+        if (c) c.click()
+        return true
+      }, '进行中卡片')
+
+      // 关键断言：弹窗应立即显示已生成的作答内容（快照预载），且无加载错误
+      await app.waitFor(`[...document.querySelectorAll('#bcMsgs .bmsg.a .md')].some((e) => e.textContent.includes('第一段'))`, 5000, '应显示已流式生成的作答')
+      const err = await app.call(() => { const e = document.querySelector('#bcMsgs .err'); return e ? e.textContent : '' })
+      assert.equal(err, '', '打开进行中卡片不应出现加载错误：' + err)
+
+      // 收尾：关闭弹窗、恢复看板配置
+      await app.call(() => { document.querySelectorAll('.zz-modal-mask').forEach((x) => x.remove()); return true })
+      await app.invoke('board', 'saveConfig', { model_id: ctx.modelId, agent_id: 'builtin', skillExclude: [], mcpExclude: [] })
       try { await server.close() } catch {}
     }
   },

@@ -1,8 +1,9 @@
 // 全局状态与事件总线（渲染层内部）
 export const state = {
   view: 'projects',
-  mode: 'task',        // task | item | settings
+  mode: 'task',        // task | item | settings | board
   pane: 'info',
+  lastTaskPane: 'info',  // 进入看板/设置/详情前的工作区 pane，离开时恢复
   taskId: null,
   item: null,          // { kind: 'env'|'skill'|'mcp'|'model', id, label, icon }
   fileTabs: [],        // [{ path, name, dirty }]

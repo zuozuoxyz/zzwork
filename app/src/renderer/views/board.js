@@ -1,5 +1,5 @@
 // 短期任务看板：卡片复用 tasks(scope='board')，进行中卡片内嵌 AI 会话
-import { invoke, store, chat as chatApi, onChatEvent } from '../lib/api.js'
+import { invoke, store, env as envApi, chat as chatApi, onChatEvent } from '../lib/api.js'
 import { state, emit } from '../lib/state.js'
 import { $, esc, ic, refreshIcons } from '../lib/ui.js'
 import { reloadBoard } from '../lib/data.js'
@@ -21,6 +21,12 @@ export function initBoardView() {
   if (body) {
     body.addEventListener('click', (e) => {
       if (e.target.closest('[data-newcard]')) { newCard().catch((err) => toast(err.message, 'err')); return }
+      const stopEl = e.target.closest('[data-stop]')
+      if (stopEl) {
+        const c = state.boardCards.find((x) => x.id === stopEl.getAttribute('data-stop'))
+        if (c) stopCard(c).catch((err) => toast(err.message, 'err'))
+        return
+      }
       const cardEl = e.target.closest('.bcard[data-card]')
       if (!cardEl) return
       const card = state.boardCards.find((c) => c.id === cardEl.getAttribute('data-card'))
@@ -94,6 +100,19 @@ export async function renderBoard() {
   refreshIcons()
 }
 
+// 本机环境里已安装可用的执行体 id 集合（含 builtin）；无识别结果返回 null（不过滤）
+async function localAvailableAgentIds() {
+  const localEnv = state.envs.find((e) => e.kind === 'local') || { id: 'local', kind: 'local', config: {} }
+  let det = state.detected[localEnv.id]
+  if (!det) {
+    try {
+      const r = await envApi('detect', { id: localEnv.id, kind: 'local' })
+      if (r && Array.isArray(r.list)) { det = { list: r.list, at: Date.now() }; state.detected[localEnv.id] = det }
+    } catch {}
+  }
+  return det ? new Set(det.list.filter((a) => a.ok).map((a) => a.id)) : null
+}
+
 // 侧栏：基本信息配置（统一作用于看板所有卡片）
 async function renderSide() {
   const el = $('#boardSideBody')
@@ -101,7 +120,10 @@ async function renderSide() {
   let cfg = { model_id: '', agent_id: '', skillExclude: [], mcpExclude: [] }
   try { cfg = await boardInvoke('config') } catch {}
   const dflt = state.models.find((m) => m.is_default) || state.models[0] || null
-  const agents = state.agents.length ? state.agents : [{ id: 'builtin', name: '内置模型聊天', kind: 'builtin' }]
+  const allAgents = state.agents.length ? state.agents : [{ id: 'builtin', name: '内置模型聊天', kind: 'builtin' }]
+  const okIds = await localAvailableAgentIds()
+  const availAgents = okIds ? allAgents.filter((a) => okIds.has(a.id)) : allAgents
+  const agents = availAgents.length ? availAgents : allAgents
   const skills = state.skills.filter((s) => s.env_id === 'global')
   const mcps = state.mcp.filter((m) => m.env_id === 'global')
   const exS = cfg.skillExclude || []
@@ -123,6 +145,7 @@ async function renderSide() {
     </select>
     <label class="bsc-k">执行体</label>
     <select class="sel2" id="boardAgentSel">
+      <option value="" ${cfg.agent_id ? '' : 'selected'}>（自动：本机 CLI 优先）</option>
       ${agents.map((a) => `<option value="${esc(a.id)}" ${a.id === cfg.agent_id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}
     </select>
     <div class="bsc-sec">Skills<span>取消勾选即禁用</span></div>
@@ -176,8 +199,11 @@ function renderKanban(body) {
     const content = String((c.meta && c.meta.content) || '')
     const brief = content.length > 120 ? content.slice(0, 120) + '…' : content
     const draggable = !!DRAG_TARGET[c.status]
+    const stop = c.status === 'doing'
+      ? `<button class="bstop" data-stop="${esc(c.id)}" title="停止并转入待审核">${ic('square', 10)}</button>`
+      : ''
     return `<div class="bcard ${esc(c.status)}${draggable ? ' draggable' : ''}" data-card="${esc(c.id)}"${draggable ? ' draggable="true"' : ''}>
-      <div class="bct">${esc(c.name)}</div>
+      <div class="bct">${esc(c.name)}${stop}</div>
       ${brief ? `<div class="bcc">${esc(brief)}</div>` : '<div class="bcc empty">（无内容）</div>'}
     </div>`
   }
@@ -226,6 +252,15 @@ async function finishCard(card) {
 // 已完成打回待审核：直接改状态，不重新作答
 async function reopenCard(card) {
   try { await store('tasks.update', { id: card.id, patch: { status: 'review' } }); await renderBoard() } catch (e) { toast(e.message, 'err') }
+}
+
+// 手动停止进行中的卡片：终止运行并转入待审核
+async function stopCard(card) {
+  try {
+    await boardInvoke('stop', { id: card.id })
+    await renderBoard()
+    toast('已停止，转入待审核')
+  } catch (e) { toast('停止失败：' + e.message, 'err') }
 }
 
 async function openCard(card) {
@@ -362,13 +397,16 @@ async function openChat(card, preset) {
     <div class="bchat-in">
       <textarea class="bta" id="bcInput" rows="2" placeholder="继续追问…（Enter 发送，Shift+Enter 换行）"></textarea>
       <div class="bchat-act">
+        <button class="btn" data-act="stop" style="display:none">停止</button>
         <button class="btn pri" data-act="send">发送</button>
       </div>
     </div>`)
   const box = mask.querySelector('#bcMsgs')
   const statusEl = mask.querySelector('#bcStatus')
   const sendBtn = mask.querySelector('[data-act="send"]')
+  const stopBtn = mask.querySelector('[data-act="stop"]')
   const input = mask.querySelector('#bcInput')
+  const syncRunning = () => { if (stopBtn) stopBtn.style.display = running ? '' : 'none' }
   const LABEL = { todo: '未开始', doing: '进行中', review: '待审核', done: '已完成' }
   const setStatus = (s) => { card.status = s; statusEl.textContent = LABEL[s] || s; statusEl.className = 'bsub ' + s }
   setStatus(card.status || 'doing')
@@ -449,6 +487,7 @@ async function openChat(card, preset) {
     if (type === 'step') { const m = ensureStream(); m.pending = false; upsertTool(m, ev.step || {}); scheduleRender(); return }
     if (type === 'done') {
       running = false
+      syncRunning()
       const last = msgs[msgs.length - 1]
       if (last && last.stream && last.pending && !(last.parts && last.parts.length) && !last.content) msgs.pop()
       else if (last && last.stream) { last.stream = false; last.pending = false }
@@ -466,11 +505,11 @@ async function openChat(card, preset) {
     const live = info && info.live
     if (live && live.runId) {
       running = true
-      runId = live.runId
       const parts = (Array.isArray(live.parts) ? live.parts : []).map((p) => ({ ...p }))
       msgs.push({ role: 'assistant', content: live.content || '', parts, stream: true, pending: !parts.length, meta: {} })
     }
     render()
+    syncRunning()
   } catch (e) { box.innerHTML = `<div class="err">加载会话失败：${esc(e.message)}</div>` }
 
   unsub = onChatEvent(onEvent)
@@ -481,6 +520,7 @@ async function openChat(card, preset) {
     if (!text || running || sendBtn.disabled) return
     input.value = ''
     running = true
+    syncRunning()
     try {
       const r = await boardInvoke('send', { id: card.id, sessionId, text })
       if (r && r.sessionId) sessionId = r.sessionId
@@ -488,10 +528,22 @@ async function openChat(card, preset) {
       renderBoard().catch(() => {})
     } catch (e) {
       running = false
+      syncRunning()
       toast('发送失败：' + e.message, 'err')
     }
   }
+  const stopRun = async () => {
+    if (!running || stopBtn.disabled) return
+    stopBtn.disabled = true
+    try { await boardInvoke('stop', { id: card.id }) } catch (e) { toast('停止失败：' + e.message, 'err') }
+    stopBtn.disabled = false
+    running = false
+    syncRunning()
+    setStatus('review')
+    refreshStatus()
+  }
   sendBtn.addEventListener('click', send)
+  stopBtn.addEventListener('click', stopRun)
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send() } })
   mask.addEventListener('mousedown', (e) => { if (e.target === mask) closeChat() })
   setTimeout(() => input.focus(), 60)

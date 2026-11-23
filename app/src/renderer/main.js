@@ -31,6 +31,46 @@ function setView(v) {
   $$('.panel').forEach((p) => p.classList.toggle('on', p.id === 'panel-' + v))
 }
 
+const TASK_PANES = new Set(['info', 'session', 'ai', 'file'])
+// 进入看板/设置/详情等整页模式前，记住当前任务工作区 pane，离开时回到它
+function rememberTaskPane() {
+  if (TASK_PANES.has(state.pane)) state.lastTaskPane = state.pane
+}
+// 从看板/设置/详情切回常规任务视图：右栏大块必须跟着切走，不能停留在整页模式
+function exitSpecialMode() {
+  if (state.mode === 'item') { closeItem(); return }
+  if (state.mode === 'board' || state.mode === 'settings') {
+    state.mode = 'task'
+    state.item = null
+    let next = state.taskId ? (state.lastTaskPane || 'ai') : 'info'
+    if (next === 'file' && !state.activeFile) next = 'ai'
+    showPane(next)
+    renderTabs()
+  }
+}
+
+// 侧栏导航项默认展示的详情：环境→本机；模型→首个提供方；skill/mcp→首个
+const DEFAULT_ITEM_VIEW = new Set(['envs', 'models', 'skills', 'mcp'])
+function preferredItem(v) {
+  if (v === 'envs') {
+    const e = state.envs.find((x) => x.kind === 'local') || state.envs[0]
+    return e ? { kind: 'env', id: e.id } : null
+  }
+  if (v === 'models') {
+    const p = state.providers[0]
+    return p ? { kind: 'provider', id: p.id } : null
+  }
+  if (v === 'skills') {
+    const s = state.skills[0]
+    return s ? { kind: 'skill', id: s.id } : null
+  }
+  if (v === 'mcp') {
+    const m = state.mcp[0]
+    return m ? { kind: 'mcp', id: m.id } : null
+  }
+  return null
+}
+
 function renderSidebars() {
   renderProjects()
   renderEnvs()
@@ -89,6 +129,7 @@ async function selectTask(id) {
 }
 
 function openItem(payload) {
+  rememberTaskPane()
   const kind = payload.kind
   const id = payload.id
   setView(ITEM_VIEW[kind] || 'projects')
@@ -127,8 +168,10 @@ function openItem(payload) {
 function closeItem() {
   state.mode = 'task'
   state.item = null
+  let next = state.taskId ? (state.lastTaskPane || 'info') : 'info'
+  if (next === 'file' && !state.activeFile) next = 'ai'
   renderTabs()
-  showPane('info')
+  showPane(next)
 }
 
 async function openInbox() {
@@ -148,6 +191,7 @@ function closeInbox() {
 }
 
 function openBoard() {
+  rememberTaskPane()
   state.mode = 'board'
   state.item = null
   setView('board')
@@ -157,6 +201,7 @@ function openBoard() {
 }
 
 function openSettings() {
+  rememberTaskPane()
   state.mode = 'settings'
   setView('settings')
   renderTabs()
@@ -169,8 +214,15 @@ function bindEvents() {
     btn.addEventListener('click', () => {
       const v = btn.getAttribute('data-view')
       if (v === 'board') { openBoard(); return }
+      // 已在该类详情页则保留当前选择，不强行跳回默认项
+      const stayingOnItem = state.mode === 'item' && state.item && ITEM_VIEW[state.item.kind] === v
       setView(v)
-      if (v === 'projects' && state.mode === 'item') closeItem()
+      if (stayingOnItem) return
+      if (DEFAULT_ITEM_VIEW.has(v)) {
+        const pick = preferredItem(v)
+        if (pick) { emit('open-item', pick); return }
+      }
+      exitSpecialMode()
     })
   })
   $('#abSet').addEventListener('click', openSettings)

@@ -518,6 +518,10 @@ async function runClaude({ task, prompt, meta, selection, systemExtra, model, en
   //   让 AskUserQuestion 等需要"询问用户"的工具通过 stdin/stdout 的 control_request 往返
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages',
     '--input-format', 'stream-json', '--permission-prompt-tool', 'stdio', '--permission-mode', 'default']
+  // 看板卡片任务禁止交互式提问：没人坐等回答，AskUserQuestion 只会让卡片永远卡在进行中。
+  // 让模型把待确认的问题作为结论输出，回合正常结束，卡片随之转「待审核」。
+  const isBoard = !!(task && task.scope === 'board')
+  if (isBoard) args.push('--disallowedTools', 'AskUserQuestion')
   if (model) args.push('--model', String(model))
   if (env.kind !== 'local') {
     try {
@@ -630,6 +634,11 @@ async function runClaude({ task, prompt, meta, selection, systemExtra, model, en
       if (req.subtype !== 'can_use_tool') return
       const rid = ev.request_id
       if (req.tool_name === 'AskUserQuestion') {
+        // 看板任务即使漏放（例如旧会话残留）也不阻塞：直接拒绝并提示把问题作为结论输出
+        if (isBoard) {
+          writeControl(rid, { behavior: 'deny', message: '看板任务不支持交互式提问。请直接把需要用户确认的问题作为结论写在回复里，然后结束本轮，不必等待回答。' })
+          return
+        }
         if (!onAsk) { writeControl(rid, { behavior: 'deny', message: '当前无交互界面，无法询问用户。' }); return }
         askInputs.set(rid, req.input || {})
         onAsk({ requestId: rid, input: req.input || {} })

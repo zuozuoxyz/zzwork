@@ -148,6 +148,18 @@ async function detect(envDesc) {
     }
   }
   const ids = await detectAgents(env, !!envDesc.force)
+  // 本机探测偶发为空（并发子进程 / --version 超时）：若已有可用缓存，保留缓存，
+  // 别把「全部已安装」误显示成「全部未安装」。手动刷新（force）时以真实结果为准。
+  if (env.kind === 'local' && !envDesc.force && !ids.length) {
+    let prev = null
+    try {
+      const raw = getStore().getSetting('zz:detect:' + env.id, '')
+      if (raw) { const d = JSON.parse(raw); if (d && Array.isArray(d.list)) prev = d.list }
+    } catch {}
+    if (prev && prev.some((a) => a.ok && a.id !== 'builtin')) {
+      return { ids: prev.filter((a) => a.ok).map((a) => a.id), list: prev, cached: true }
+    }
+  }
   const list = [
     { id: 'builtin', name: '内置模型聊天', ok: true, pkg: '' },
     ...KNOWN_AGENTS.map((a) => ({ id: a.id, name: a.name || a.id, ok: ids.includes(a.id), pkg: a.pkg || '' }))
