@@ -10,6 +10,24 @@
 </head>
 <body>
 <div id="zzv">
+  <div id="bootSplash" aria-hidden="true">
+    <div class="bs-wrap">
+      <svg class="bs-mark" viewBox="0 0 512 512" aria-hidden="true">
+        <defs>
+          <linearGradient id="bsmark" x1="0.1" y1="0.1" x2="0.9" y2="0.9">
+            <stop offset="0" stop-color="#38bdf8"/>
+            <stop offset="1" stop-color="#2dd4bf"/>
+          </linearGradient>
+        </defs>
+        <rect width="512" height="512" rx="116" fill="#12161c"/>
+        <path d="M140 140 H342 L140 306 H342" fill="none" stroke="url(#bsmark)" stroke-width="64" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M280 256 H412 L280 390 H412" fill="none" stroke="url(#bsmark)" stroke-width="46" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      <div class="bs-name">zzwork</div>
+      <div class="bs-bar"><i></i></div>
+      <div class="bs-tip">正在加载工作区…</div>
+    </div>
+  </div>
   <div class="win">
     <div class="titlebar">
       <svg class="mark" viewBox="0 0 512 512" aria-hidden="true">
@@ -239,7 +257,7 @@
       <span class="lf" id="stTask">未选择任务</span>
       <span class="s"></span>
       <span id="stRight"></span>
-      <span id="stVersion">zzwork 0.6.0</span>
+      <span id="stVersion">zzwork 0.6.1</span>
     </div>
   </div>
 

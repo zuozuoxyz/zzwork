@@ -223,51 +223,75 @@ function bindEvents() {
   })
 }
 
+// 让出到下一帧，确保开屏动画已绘制后再进行较重的数据装载
+function nextFrame() {
+  return new Promise((resolve) => {
+    let done = false
+    const fin = () => { if (!done) { done = true; resolve() } }
+    requestAnimationFrame(() => setTimeout(fin, 0))
+    setTimeout(fin, 120) // 兜底：隐藏窗口节流 rAF 时也不卡死启动
+  })
+}
+
+// 淡出并移除开屏遮罩
+function hideBootSplash() {
+  const s = document.getElementById('bootSplash')
+  if (!s || s.classList.contains('out')) return
+  s.classList.add('out')
+  setTimeout(() => { try { s.remove() } catch {} }, 400)
+}
+
 async function boot() {
-  initProjectsView()
-  initProjectFiles()
-  initEnvsView()
-  initSkillsView()
-  initMcpView()
-  initModelsView()
-  initSessionView()
-  initChatView()
-  initInboxView()
-  initBoardView()
-  initTerminalView()
-  initUpdate()
-  bindEvents()
-
+  // 首帧只画开屏遮罩，交互被冻结的这段时间用户看到的是加载动画而非不可操作的界面
+  await nextFrame()
   try {
-    await loadBase()
-  } catch (e) {
-    $('#projectsBody').innerHTML = `<div class="err" style="margin:10px">数据层加载失败：${String(e.message || e)}</div>`
+    initProjectsView()
+    initProjectFiles()
+    initEnvsView()
+    initSkillsView()
+    initMcpView()
+    initModelsView()
+    initSessionView()
+    initChatView()
+    initInboxView()
+    initBoardView()
+    initTerminalView()
+    initUpdate()
+    bindEvents()
+
+    try {
+      await loadBase()
+    } catch (e) {
+      $('#projectsBody').innerHTML = `<div class="err" style="margin:10px">数据层加载失败：${String(e.message || e)}</div>`
+      refreshIcons()
+      return
+    }
+
+    // 启动时先用本机缓存快速出结果，稍后在后台刷新远端环境
+    try { await envApi('scan', { remote: false }); await reloadSkills() } catch {}
+    try { await loadDetectCache() } catch {}
+
+    renderSidebars()
+    setView('projects')
+
+    let last = ''
+    try { last = await store('settings.get', { key: 'activeTaskId', dflt: '' }) } catch {}
+    const exists = state.tasks.some((t) => t.id === last)
+    const first = exists ? last : (state.tasks[0] && state.tasks[0].id)
+    if (first) await selectTask(first)
+    else await selectTask(null)
+
     refreshIcons()
-    return
+
+    // 后台刷新远端 Skills 与各环境执行体状态，不阻塞界面
+    ;(async () => {
+      try { await scanAll() } catch {}
+      emit('data-scanned')
+      try { await refreshEnvsStatus() } catch {}
+    })()
+  } finally {
+    hideBootSplash()
   }
-
-  // 启动时先用本机缓存快速出结果，稍后在后台刷新远端环境
-  try { await envApi('scan', { remote: false }); await reloadSkills() } catch {}
-  try { await loadDetectCache() } catch {}
-
-  renderSidebars()
-  setView('projects')
-
-  let last = ''
-  try { last = await store('settings.get', { key: 'activeTaskId', dflt: '' }) } catch {}
-  const exists = state.tasks.some((t) => t.id === last)
-  const first = exists ? last : (state.tasks[0] && state.tasks[0].id)
-  if (first) await selectTask(first)
-  else await selectTask(null)
-
-  refreshIcons()
-
-  // 后台刷新远端 Skills 与各环境执行体状态，不阻塞界面
-  ;(async () => {
-    try { await scanAll() } catch {}
-    emit('data-scanned')
-    try { await refreshEnvsStatus() } catch {}
-  })()
 }
 
 boot()
