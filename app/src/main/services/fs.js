@@ -65,8 +65,7 @@ function readFileExternal(target) {
 }
 
 // 写二进制图片（dataURL → 文件）：本地直接写；远程经 SFTP。落点必须落在任务根内
-async function writeBase64File(target, dataUrl) {
-  const m = /^data:([^;]+);base64,([\s\S]+)$/.exec(String(dataUrl || ''))
+async function writeBase64File(target, dataUrl) {  const m = /^data:([^;]+);base64,([\s\S]+)$/.exec(String(dataUrl || ''))
   if (!m) throw new Error('无效的图片数据')
   const mime = m[1].toLowerCase()
   const ext = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' }[mime]
@@ -81,10 +80,46 @@ async function writeBase64File(target, dataUrl) {
   return { size: buf.length }
 }
 
+const MIME_BY_EXT = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
+  '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml', '.ico': 'image/x-icon',
+  '.html': 'text/html; charset=utf-8', '.htm': 'text/html; charset=utf-8',
+  '.css': 'text/css; charset=utf-8', '.js': 'text/javascript; charset=utf-8', '.mjs': 'text/javascript; charset=utf-8',
+  '.json': 'application/json; charset=utf-8', '.txt': 'text/plain; charset=utf-8', '.md': 'text/markdown; charset=utf-8',
+  '.xml': 'application/xml; charset=utf-8', '.yaml': 'text/yaml; charset=utf-8', '.yml': 'text/yaml; charset=utf-8',
+  '.woff': 'font/woff', '.woff2': 'font/woff2', '.ttf': 'font/ttf', '.otf': 'font/otf',
+  '.wasm': 'application/wasm', '.pdf': 'application/pdf', '.mp4': 'video/mp4', '.webm': 'video/webm',
+  '.mp3': 'audio/mpeg', '.wav': 'audio/wav'
+}
+const PREVIEW_LIMIT = 50 * 1024 * 1024
+const notFound = () => new Response('not found', { status: 404 })
+
+// HTML 预览协议：zzwork-file://local/<编码后的绝对路径>，仅允许读任务根内文件，
+// 以便页面里的相对 css/js/图片也走同一协议正常加载
+function registerProtocol(protocol) {
+  protocol.handle('zzwork-file', (req) => {
+    try {
+      const u = new URL(req.url)
+      if (u.hostname !== 'local') return notFound()
+      const p = decodeURIComponent(u.pathname || '')
+      if (!/^\/[a-zA-Z]:\//.test(p)) return notFound()
+      const abs = path.resolve(p.slice(1))
+      if (!insideTaskRoot(abs)) return new Response('forbidden', { status: 403 })
+      const st = fs.statSync(abs)
+      if (!st.isFile()) return notFound()
+      if (st.size > PREVIEW_LIMIT) return new Response('too large', { status: 413 })
+      return new Response(fs.readFileSync(abs), {
+        headers: { 'content-type': MIME_BY_EXT[path.extname(abs).toLowerCase()] || 'application/octet-stream', 'cache-control': 'no-store' }
+      })
+    } catch { return notFound() }
+  })
+}
+
 module.exports = {
   readDir,
   readFileExternal,
   writeBase64File,
+  registerProtocol,
   register(ipcMain) {
     ipcMain.handle('zz:fs:readDir', (_e, p) => {
       const r = parseRemotePath(p.path)
@@ -100,16 +135,12 @@ module.exports = {
       if (st.size > 20 * 1024 * 1024) throw new Error('文件超过 20MB，已取消打开')
       return fs.readFileSync(abs, 'utf8')
     })
-    const MIME_BY_EXT = {
-      '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif',
-      '.webp': 'image/webp', '.bmp': 'image/bmp', '.svg': 'image/svg+xml', '.ico': 'image/x-icon'
-    }
     ipcMain.handle('zz:fs:readFileExternal', (_e, p) => readFileExternal(p.path))
     ipcMain.handle('zz:fs:readBase64', (_e, p) => {
       if (parseRemotePath(p.path)) throw new Error('远程图片暂不支持预览')
       const abs = assertInside(p.path)
       const mime = MIME_BY_EXT[path.extname(abs).toLowerCase()]
-      if (!mime) throw new Error('不是可预览的图片文件')
+      if (!mime || !mime.startsWith('image/')) throw new Error('不是可预览的图片文件')
       const st = fs.statSync(abs)
       if (st.size > 8 * 1024 * 1024) throw new Error('图片超过 8MB')
       const buf = fs.readFileSync(abs)

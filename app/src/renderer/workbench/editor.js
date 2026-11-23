@@ -1,7 +1,7 @@
 // Monaco 编辑器（懒加载）+ 每个任务的文件 tab 记忆
 import { fsapi, dialog, store, lspapi } from '../lib/api.js'
 import { state, emit, activeTask } from '../lib/state.js'
-import { $, basename } from '../lib/ui.js'
+import { $, esc, ic, basename, dirname, refreshIcons } from '../lib/ui.js'
 import { toast } from '../components/toast.js'
 
 let monaco = null
@@ -9,6 +9,15 @@ let editor = null
 let ready = null
 const models = new Map()   // path -> { model, saved, dirty }
 let hostObserver = null
+
+// 图片 / HTML / Markdown / JSON 预览：复用 pane-file，用一个覆盖层呈现
+const IMAGE_EXT = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'svg'])
+const HTML_EXT = new Set(['html', 'htm'])
+const MD_EXT = new Set(['md', 'markdown'])
+const JSON_EXT = new Set(['json'])
+const WIN_PATH_RE = /^[a-zA-Z]:[\\/]/
+const previewFailed = new Set()   // 读取失败的图片退回源码，避免每次激活都重试
+const viewMode = new Map()        // path -> 'preview' | 'source'（用户手动切换后覆盖默认）
 
 // 「转到定义」：SSH / WSL 目标用 zzfile: 自定义 URI 承载（纯身份 + opener 路由）
 let providersReady = false
@@ -29,6 +38,156 @@ function langOf(name) {
     diff: 'diff', patch: 'diff'
   }
   return map[ext] || 'plaintext'
+}
+
+// ---------- 图片 / HTML 预览 ----------
+function extOf(name) {
+  const s = String(name || '')
+  return s.includes('.') ? s.split('.').pop().toLowerCase() : ''
+}
+
+// 返回可渲染类型：image / html / md / json / ''（不可渲染）
+function viewKind(path, name) {
+  const p = String(path)
+  if (previewFailed.has(p)) return ''
+  const ext = extOf(name || p)
+  if (IMAGE_EXT.has(ext) && !/^ssh:\/\//i.test(p)) return 'image'
+  // HTML 预览只支持本地盘路径（WSL/SSH 无法解析相对资源），且必须落在任务目录内
+  if (HTML_EXT.has(ext) && WIN_PATH_RE.test(p) && isUnder(currentTaskPath(), p)) return 'html'
+  if (MD_EXT.has(ext)) return 'md'
+  if (JSON_EXT.has(ext)) return 'json'
+  return ''
+}
+
+// 各类文件的默认视图：html/md 默认渲染，json 默认源码
+function defaultMode(kind) {
+  return kind === 'json' ? 'source' : 'preview'
+}
+
+function currentMode(tab, kind) {
+  if (kind === 'image') return 'preview'
+  return viewMode.get(tab.path) || defaultMode(kind)
+}
+
+// 在「预览/格式」与「源码」之间切换，并记住该文件的选择
+function toggleView(tab) {
+  const kind = viewKind(tab.path, tab.name)
+  if (!kind || kind === 'image') return
+  viewMode.set(tab.path, currentMode(tab, kind) === 'preview' ? 'source' : 'preview')
+  activate(tab.path)
+}
+
+function previewUrl(p) {
+  const norm = String(p).replace(/\\/g, '/')
+  return 'zzwork-file://local/' + norm.split('/').map(encodeURIComponent).join('/')
+}
+
+// 渲染栏右侧的「源码」按钮（预览 → 源码）
+function pvSourceBtn() {
+  return `<button class="btn sm" data-pv="toggle">${ic('file-code', 11)} 源码</button>`
+}
+
+function bindPvToggle(host, tab) {
+  const b = host.querySelector('[data-pv="toggle"]')
+  if (b) b.addEventListener('click', () => toggleView(tab))
+}
+
+async function readPreviewText(tab) {
+  try { return await fsapi('readFile', { path: tab.path }) }
+  catch { try { return await fsapi('readFileExternal', { path: tab.path }) } catch { return null } }
+}
+
+async function openPreview(tab, kind) {
+  const host = $('#previewHost')
+  const ed = $('#editorHost')
+  if (!host || !ed) return false
+  if (kind === 'image') {
+    let d
+    try { d = await fsapi('readBase64', { path: tab.path }) } catch (e) {
+      previewFailed.add(tab.path)
+      toast('无法预览图片：' + e.message, 'err', 4000)
+      return false
+    }
+    host.innerHTML = `<div class="imgpane"><img src="${esc(d.dataUrl)}" alt="${esc(tab.name)}" title="点击放大"></div>`
+    const img = host.querySelector('img')
+    if (img) img.addEventListener('click', () => {
+      import('../components/markdown.js').then((m) => m.openImageZoom(d.dataUrl, tab.name)).catch(() => {})
+    })
+  } else if (kind === 'html') {
+    const url = previewUrl(tab.path)
+    host.innerHTML = `<div class="pvbar"><span class="nm">${ic('globe', 11)} ${esc(tab.name)}</span>
+      <button class="btn sm" data-pv="reload">${ic('refresh-cw', 11)} 刷新</button>
+      ${pvSourceBtn()}</div>
+      <iframe class="pvframe" id="pvFrame" sandbox="allow-scripts allow-same-origin allow-forms allow-modals" src="${esc(url)}"></iframe>`
+    const frame = host.querySelector('#pvFrame')
+    if (frame) frame.addEventListener('load', () => { frame.dataset.loaded = '1' })
+    const reload = host.querySelector('[data-pv="reload"]')
+    if (reload) reload.addEventListener('click', () => {
+      const f = host.querySelector('#pvFrame')
+      if (f) f.src = url + (url.includes('?') ? '&' : '?') + '_t=' + Date.now()
+    })
+    bindPvToggle(host, tab)
+  } else if (kind === 'md' || kind === 'json') {
+    const text = await readPreviewText(tab)
+    if (text == null) { toast('无法打开文件', 'err', 4000); return false }
+    if (kind === 'md') {
+      const m = await import('../components/markdown.js')
+      host.innerHTML = `<div class="pvbar"><span class="nm">${ic('file-text', 11)} ${esc(tab.name)}</span>${pvSourceBtn()}</div>
+        <div class="mdview md" id="mdView">${m.renderMarkdown(text)}</div>`
+      const mdv = host.querySelector('#mdView')
+      if (mdv) { m.highlightIn(mdv); m.enhanceMarkdown(mdv, { root: dirname(tab.path) }); m.bindMarkdownClicks(mdv) }
+    } else {
+      let pretty = text
+      try { pretty = JSON.stringify(JSON.parse(text), null, 2) } catch {}
+      host.innerHTML = `<div class="pvbar"><span class="nm">${ic('braces', 11)} ${esc(tab.name)}</span>${pvSourceBtn()}</div>
+        <pre class="jsonview" id="jsonView"></pre>`
+      const pre = host.querySelector('#jsonView')
+      if (pre) pre.textContent = pretty
+    }
+    bindPvToggle(host, tab)
+  }
+  host.style.display = 'flex'
+  ed.style.display = 'none'
+  refreshIcons()
+  return true
+}
+
+function hidePreview() {
+  const host = $('#previewHost')
+  if (!host) return
+  host.style.display = 'none'
+  host.innerHTML = ''
+  const ed = $('#editorHost')
+  if (ed) ed.style.display = ''
+}
+
+// 源码模式下右上角的「预览/格式化」切换按钮
+function showSourceBar(tab, kind) {
+  const bar = $('#fileBar')
+  if (!bar) return
+  if (!kind || kind === 'image') { hideFileBar(); return }
+  const label = kind === 'json' ? '格式化' : '预览'
+  const icon = kind === 'json' ? 'braces' : (kind === 'md' ? 'eye' : 'globe')
+  bar.innerHTML = `<button class="btn sm" data-pv="toggle">${ic(icon, 11)} ${label}</button>`
+  bar.style.display = 'flex'
+  const b = bar.querySelector('[data-pv="toggle"]')
+  if (b) b.addEventListener('click', () => toggleView(tab))
+  refreshIcons()
+}
+
+function hideFileBar() {
+  const bar = $('#fileBar')
+  if (!bar) return
+  bar.style.display = 'none'
+  bar.innerHTML = ''
+}
+
+function showFilePane() {
+  state.pane = 'file'
+  const pane = document.getElementById('pane-file')
+  document.querySelectorAll('.pane').forEach((p) => p.classList.toggle('on', p === pane))
+  emit('pane-changed', 'file')
+  emit('tabs-changed')
 }
 
 // ---------- 转到定义 ----------
@@ -312,6 +471,14 @@ export async function openDiffTab(files, title) {
 export async function activate(path) {
   const tab = state.fileTabs.find((t) => t.path === path)
   if (!tab) return
+  const kind = tab.virtual ? '' : viewKind(tab.path, tab.name)
+  const mode = kind ? currentMode(tab, kind) : 'source'
+  if (kind && mode === 'preview' && await openPreview(tab, kind)) {
+    state.activeFile = path
+    showFilePane()
+    hideFileBar()
+    return
+  }
   const entry = await loadEntry(path, tab.name, tab.virtual, tab.content, tab.external)
   if (!entry) {
     state.fileTabs = state.fileTabs.filter((t) => t.path !== path)
@@ -319,17 +486,15 @@ export async function activate(path) {
     return
   }
   state.activeFile = path
-  state.pane = 'file'
-  const pane = document.getElementById('pane-file')
-  document.querySelectorAll('.pane').forEach((p) => p.classList.toggle('on', p === pane))
   if (editor) {
+    hidePreview()
     editor.updateOptions({ readOnly: !!(tab.virtual || tab.readOnly) })
     editor.setModel(entry.model)
     editor.layout()
     editor.focus()
   }
-  emit('pane-changed', 'file')
-  emit('tabs-changed')
+  showFilePane()
+  showSourceBar(tab, kind)
 }
 
 export async function closeFile(path) {
@@ -350,6 +515,8 @@ export async function closeFile(path) {
     if (next) await activate(next.path)
     else {
       state.pane = 'info'
+      hidePreview()
+      hideFileBar()
       document.querySelectorAll('.pane').forEach((p) => p.classList.toggle('on', p.id === 'pane-info'))
       emit('tabs-changed')
     }
@@ -378,6 +545,8 @@ export async function saveActive() {
 export function closeAllFiles(taskId) {
   for (const [, entry] of models) { try { entry.model.dispose() } catch {} }
   models.clear()
+  hidePreview()
+  hideFileBar()
   if (taskId) persistMemory(taskId)
   state.fileTabs = []
   state.activeFile = null

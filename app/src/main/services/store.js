@@ -158,7 +158,9 @@ function handlers() {
     'agents.save': (p) => S().saveAgents(p.list),
 
     'groups.list': () => S().listGroups(),
-    'groups.create': (p) => S().createGroup(p.name),
+    'groups.get': (p) => S().getGroup(p.id),
+    'groups.create': (p) => S().createGroup(p.name, p.parentId || ''),
+    'groups.update': (p) => S().updateGroup(p.id, p.patch),
     'groups.delete': (p) => S().deleteGroup(p.id),
 
     'tasks.list': () => S().listTasks(),
@@ -166,6 +168,10 @@ function handlers() {
     'tasks.create': (p) => S().createTask(p.dto),
     'tasks.update': (p) => S().updateTask(p.id, p.patch),
     'tasks.delete': (p) => S().deleteTask(p.id),
+    'tasks.trash': (p) => S().trashTask(p.id),
+    'tasks.restore': (p) => S().restoreTask(p.id),
+    'tasks.trashed': () => S().listTrashedTasks(),
+    'tasks.emptyTrash': () => S().emptyTrash(),
 
     'todos.list': (p) => S().listTodos(p.taskId),
     'todos.add': (p) => S().addTodo(p.taskId, p.title),

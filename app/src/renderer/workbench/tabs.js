@@ -8,7 +8,7 @@ const FIXED = [
   { pane: 'ai', icon: 'message-square', label: 'AI 对话' }
 ]
 
-const PANES = ['info', 'inbox', 'session', 'ai', 'file', 'item', 'settings']
+const PANES = ['info', 'inbox', 'session', 'ai', 'file', 'item', 'settings', 'board']
 
 export function showPane(name) {
   state.pane = name
@@ -42,6 +42,11 @@ export function renderTabs() {
   }
   if (state.mode === 'settings') {
     bar.innerHTML = `<div class="tab on" data-pane="settings">${ic('settings', 12)}<span>设置</span><span class="pin"></span></div>`
+    refreshIcons()
+    return
+  }
+  if (state.mode === 'board') {
+    bar.innerHTML = `<div class="tab on" data-pane="board">${ic('kanban-square', 12)}<span>看板</span><span class="pin"></span></div>`
     refreshIcons()
     return
   }

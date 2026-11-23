@@ -1,10 +1,12 @@
 // AI 对话 pane：多会话切换、执行体/模型选择、变更卡片、子代理与编排
 import { chat as chatApi, store, onChatEvent, fsapi, invoke } from '../lib/api.js'
-import { $, esc, ic, refreshIcons, joinPath } from '../lib/ui.js'
+import { $, esc, ic, refreshIcons, joinPath, fmtTok } from '../lib/ui.js'
 import { renderMarkdown, highlightIn, enhanceMarkdown, bindMarkdownClicks, openImageZoom } from '../components/markdown.js'
 import { toast } from '../components/toast.js'
 import { showContextMenu } from '../components/contextMenu.js'
 import { openDiffTab } from './editor.js'
+import { showPane } from './tabs.js'
+import { emit, on } from '../lib/state.js'
 
 let taskId = null
 let sessionId = null
@@ -23,7 +25,9 @@ let pendingAttachments = []
 let shells = []
 // 每个任务各自保留未发送的输入草稿，切换任务时互不串台
 const drafts = new Map()
-const ATT_MAX = 6
+// 运行中排队待发送的消息：按会话隔离，AI 一轮结束后自动逐条发出
+const queues = new Map()
+const ATT_MAX = 30
 const ATT_MAX_BYTES = 8 * 1024 * 1024
 const ATT_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp', 'image/gif'])
 // 聊天内联 diff 只展示前这么多字符，完整内容可在编辑区标签页打开
@@ -102,33 +106,43 @@ function makeThumb(dataUrl, max) {
     } catch { resolve(dataUrl) }
   })
 }
-async function addAttachment(file) {
-  if (!ATT_MIMES.has(file.type)) { toast('仅支持 png/jpeg/webp/gif', 'warn'); return }
-  if (file.size > ATT_MAX_BYTES) { toast('单张图片不能超过 8MB', 'warn'); return }
-  if (pendingAttachments.length >= ATT_MAX) { toast(`最多 ${ATT_MAX} 张图片`, 'warn'); return }
+// 把粘贴/拖入的文件构建为附件对象（校验类型与大小）；失败返回 null
+export async function buildImageAttachment(file) {
+  if (!ATT_MIMES.has(file.type)) { toast('仅支持 png/jpeg/webp/gif', 'warn'); return null }
+  if (file.size > ATT_MAX_BYTES) { toast('单张图片不能超过 8MB', 'warn'); return null }
   let dataUrl = ''
-  try { dataUrl = await readAsDataUrl(file) } catch { toast('读取图片失败', 'err'); return }
+  try { dataUrl = await readAsDataUrl(file) } catch { toast('读取图片失败', 'err'); return null }
   const thumb = await makeThumb(dataUrl, 320)
-  pendingAttachments.push({
+  return {
     id: 'att-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6),
     name: file.name || '粘贴图片', mime: file.type, dataUrl, thumb: thumb || dataUrl, size: file.size
-  })
-  renderAttachments()
+  }
 }
-function onPaste(e) {
+// 从剪贴板事件里取出图片文件（兼容仅 files、没有 items 的来源）
+export function imagesFromPaste(e) {
   const cd = e.clipboardData
   const fromItems = [...((cd && cd.items) || [])]
     .filter((it) => it.kind === 'file' && /^image\//.test(it.type))
     .map((it) => it.getAsFile()).filter(Boolean)
-  // 部分平台/来源只填充 files 而没有 items
   const fromFiles = [...((cd && cd.files) || [])].filter((f) => /^image\//.test(f.type))
-  const files = fromItems.length ? fromItems : fromFiles
+  return fromItems.length ? fromItems : fromFiles
+}
+async function addAttachment(file) {
+  if (pendingAttachments.length >= ATT_MAX) { toast(`最多 ${ATT_MAX} 张图片`, 'warn'); return }
+  const att = await buildImageAttachment(file)
+  if (!att) return
+  pendingAttachments.push(att)
+  renderAttachments()
+}
+function onPaste(e) {
+  const files = imagesFromPaste(e)
   if (!files.length) return
   e.preventDefault()
   const room = ATT_MAX - pendingAttachments.length
   if (room <= 0) { toast(`最多 ${ATT_MAX} 张图片`, 'warn'); return }
   files.slice(0, room).forEach((f) => addAttachment(f))
 }
+export const ATTACH_MAX = ATT_MAX
 function renderAttachments() {
   const el = $('#chatAttach')
   if (!el) return
@@ -141,6 +155,80 @@ function clearAttachments() {
   if (!pendingAttachments.length) return
   pendingAttachments = []
   renderAttachments()
+}
+
+// —— 运行中消息队列 ——
+function queueKey() { return sessionId || ('task:' + taskId) || '' }
+function currentQueue() {
+  const k = queueKey()
+  if (!k) return []
+  if (!queues.has(k)) queues.set(k, [])
+  return queues.get(k)
+}
+// 首轮运行时 sessionId 尚未确定，队列暂存在 task 键下；拿到 sessionId 后迁移过去，避免漏发
+function adoptTaskQueue() {
+  if (!taskId || !sessionId) return
+  const from = 'task:' + taskId
+  const orphan = queues.get(from)
+  if (!orphan) return
+  if (orphan.length) currentQueue().unshift(...orphan)
+  queues.delete(from)
+}
+function renderQueue() {
+  const el = $('#chatQueue')
+  if (!el) return
+  const q = currentQueue()
+  el.classList.toggle('on', q.length > 0)
+  if (!q.length) { el.innerHTML = ''; return }
+  el.innerHTML = q.map((it, i) => {
+    const imgs = it.atts && it.atts.length
+    const label = it.text ? esc(it.text.replace(/\s+/g, ' ').slice(0, 200)) : '（图片）'
+    return `<div class="qrow">
+      <span class="qhb">${i + 1}</span>
+      <span class="qt" title="${esc(it.text || '')}">${label}</span>
+      ${imgs ? `<span class="qimg">${ic('image', 12)} ${it.atts.length}</span>` : ''}
+      <button class="qx" data-qrm="${esc(it.id)}" title="取消此条">×</button>
+    </div>`
+  }).join('')
+  refreshIcons()
+}
+function enqueue(text, atts) {
+  const q = currentQueue()
+  q.push({ id: 'q-' + Date.now() + '-' + Math.random().toString(36).slice(2, 7), text: text || '', atts: atts || [] })
+  renderQueue()
+}
+function removeQueueItem(id) {
+  const q = currentQueue()
+  const i = q.findIndex((x) => x.id === id)
+  if (i >= 0) q.splice(i, 1)
+  renderQueue()
+}
+// AI 一轮正常结束后，把队列头当作独立一轮发出
+function drainIfQueued() {
+  const q = currentQueue()
+  if (!q.length || !taskId) return
+  const it = q.shift()
+  renderQueue()
+  dispatchSend(it.text, it.atts)
+}
+// 停止时把尚未发出的队列内容回写到输入框，供用户重新编辑
+function flushQueueToInput() {
+  const q = currentQueue()
+  if (!q.length) return
+  const el = $('#chatInput')
+  if (el) {
+    const texts = q.map((x) => x.text).filter(Boolean)
+    const joined = (el.value ? el.value + '\n' : '') + texts.join('\n')
+    el.value = joined
+    autosize()
+  }
+  const atts = q.flatMap((x) => (x.atts || []).map((a) => ({ ...a, id: a.id || ('att-' + Math.random().toString(36).slice(2)) })))
+  if (atts.length) {
+    const room = ATT_MAX - pendingAttachments.length
+    if (room > 0) { pendingAttachments = pendingAttachments.concat(atts.slice(0, room)); renderAttachments() }
+  }
+  q.length = 0
+  renderQueue()
 }
 
 function upsertShell(sh) {
@@ -204,6 +292,12 @@ export function initChatView() {
     if (!btn) return
     pendingAttachments = pendingAttachments.filter((a) => a.id !== btn.getAttribute('data-rm'))
     renderAttachments()
+  })
+  const qEl = $('#chatQueue')
+  if (qEl) qEl.addEventListener('click', (e) => {
+    const btn = e.target.closest && e.target.closest('[data-qrm]')
+    if (!btn) return
+    removeQueueItem(btn.getAttribute('data-qrm'))
   })
   const shEl = $('#chatShells')
   if (shEl) shEl.addEventListener('click', async (e) => {
@@ -292,6 +386,11 @@ export function initChatView() {
     if (sub) { submitAsk(sub); return }
   })
   bindMarkdownClicks($('#chatInner'))
+
+  // 切到 AI 对话时滚到最新一条（首次打开任务时 pane 尚未可见，renderChat 里滚动无效）
+  on('pane-changed', (name) => {
+    if (name === 'ai' && taskId) requestAnimationFrame(() => scrollBottom(true))
+  })
 
   onChatEvent(handleEvent)
 }
@@ -382,6 +481,7 @@ export async function renderChat(id, sid) {
     if (ci) { ci.value = ''; autosize() }
     $('#chatInput').disabled = true
     $('#chatSend').disabled = true
+    renderQueue()
     return
   }
   $('#chatInput').disabled = false
@@ -395,6 +495,7 @@ export async function renderChat(id, sid) {
       return
     }
     sessionId = next.session ? next.session.id : null
+    adoptTaskQueue()
     messages = (next.messages || []).map((m) => ({ ...m, meta: parseMeta(m.meta) }))
     // 本轮仍在跑：主进程给出快照（步骤/计划/待回答提问只在本轮内存里），重建进行中的气泡
     const live = next.live
@@ -424,8 +525,11 @@ export async function renderChat(id, sid) {
     if (next.agentNotice) toast(next.agentNotice, 'warn', 6000)
     refreshChatHeader()
     renderShells()
+    renderQueue()
     renderAll()
     scrollBottom(true)
+    // 回到本任务时若还有未发出的排队消息（中途切走导致没能接力），在此恢复发送
+    if (!running) requestAnimationFrame(() => { if (!running) drainIfQueued() })
   } catch (e) {
     $('#chatInner').innerHTML = `<div class="err">初始化会话失败：${esc(e.message)}</div>`
   }
@@ -444,7 +548,8 @@ export function refreshChatHeader() {
 }
 
 function updateButtons() {
-  $('#chatSend').style.display = running ? 'none' : ''
+  // 发送按钮常驻（运行中点击即入队）；运行中额外显示停止
+  $('#chatSend').style.display = ''
   $('#chatStop').style.display = running ? 'inline-block' : 'none'
 }
 
@@ -618,13 +723,27 @@ function runStatusHtml(parts) {
   return `<div class="runstatus"><span class="tspin"></span><span class="rst" title="${esc(label)}">${esc(label)}</span></div>`
 }
 
+function tokenBits(meta) {
+  const i = Number(meta.inputTokens) || 0
+  const o = Number(meta.outputTokens) || 0
+  const c = Number(meta.cachedTokens) || 0
+  if (i || o || c) {
+    const parts = ['输入 ' + fmtTok(i), '输出 ' + fmtTok(o)]
+    if (c) parts.push('缓存 ' + fmtTok(c))
+    return parts.join(' · ')
+  }
+  if (meta.tokens) return '约 ' + fmtTok(meta.tokens) + ' tokens'
+  return ''
+}
+
 function footHtml(m, streaming) {
   const meta = m.meta || {}
   const bits = []
   if (streaming) {
     if (m.startedAt) bits.push('工作中 · ' + fmtDur(Date.now() - m.startedAt))
   } else if (meta.durationMs) bits.push('工作耗时 ' + fmtDur(meta.durationMs))
-  if (meta.tokens) bits.push('~' + meta.tokens + ' tokens')
+  const tok = tokenBits(meta)
+  if (tok) bits.push(tok)
   const agent = meta.agentName || (info && info.agentName) || ''
   const model = meta.modelName || ''
   if (agent) bits.push(model && model !== agent ? agent + ' · ' + model : agent)
@@ -669,6 +788,20 @@ function messageHtml(m) {
     const meta = m.meta || {}
     return `<details class="ctxchg"><summary>${esc(meta.summary || m.content || '工作区变更')}</summary>
       <pre>${esc(meta.details || '')}</pre></details>`
+  }
+  if (kind === 'aux') {
+    const meta = m.meta || {}
+    const st = meta.status || 'done'
+    const stateHtml = st === 'running'
+      ? '<span class="tspin"></span>'
+      : st === 'error'
+        ? '<span class="aux-dot error"></span>'
+        : '<span class="aux-dot done"></span>'
+    const summary = meta.summary ? `<span class="aux-sum">${esc(meta.summary)}</span>` : ''
+    const body = meta.details ? `<div class="aux-body"><pre>${esc(meta.details)}</pre></div>` : ''
+    return `<div class="msg a"><details class="auxcard${st === 'error' ? ' err' : ''}"${st === 'error' ? ' open' : ''}>
+      <summary><span class="aux-ico">${ic('sparkles', 13)}</span><span class="aux-title">${esc(meta.title || '辅助处理')}</span>${summary}<span class="aux-state">${stateHtml}</span></summary>
+      ${body}</details></div>`
   }
   if (kind === 'subagent') {
     const meta = m.meta || {}
@@ -781,33 +914,79 @@ async function send() {
   const input = $('#chatInput')
   const text = input.value.trim()
   const atts = pendingAttachments.map(({ name, mime, dataUrl, thumb, size }) => ({ name, mime, dataUrl, thumb, size }))
-  if ((!text && !atts.length) || !taskId || running) return
-  const sent = pendingAttachments
+  if ((!text && !atts.length) || !taskId) return
   input.value = ''
   autosize()
   clearAttachments()
+  drafts.delete(taskId) // 已发送，清掉该任务的草稿，切回时不再回填
+  // 统一入队：AI 正在回复时只排队、不打断；空闲时立即发出队首（含之前因出错暂停的队列）
+  enqueue(text, atts)
+  if (!running) drainIfQueued()
+}
+
+function dispatchSend(text, atts) {
   running = true
   updateButtons()
-  try {
-    const r = await chatApi('send', { taskId, sessionId, text, attachments: atts })
+  chatApi('send', { taskId, sessionId, text, attachments: atts || [] }).then((r) => {
     runId = r && r.runId
-    drafts.delete(taskId) // 已发送，清掉该任务的草稿，切回时不再回填
-  } catch (e) {
-    pendingAttachments = sent
+  }).catch((e) => {
+    pendingAttachments = (atts || []).map((a) => ({ ...a, id: a.id || ('att-' + Math.random().toString(36).slice(2)) }))
     renderAttachments()
-    input.value = text
-    autosize()
+    const input = $('#chatInput')
+    if (input) { input.value = text || ''; autosize() }
     if (text) drafts.set(taskId, text)
     running = false
     updateButtons()
     toast('发送失败：' + e.message, 'err', 4000)
+  })
+}
+
+// 供功能图/画板把上下文预填或直接发送到 AI 对话
+export function prefillChat(text) {
+  if (!taskId) return
+  showPane('ai')
+  const el = $('#chatInput')
+  if (!el) return
+  el.value = text || ''
+  autosize()
+  el.focus()
+  try { el.setSelectionRange(el.value.length, el.value.length) } catch {}
+}
+
+export async function sendChatText(text) {
+  if (!taskId) return
+  showPane('ai')
+  const el = $('#chatInput')
+  if (!el) return
+  el.value = text || ''
+  autosize()
+  await send()
+}
+
+// 会话管理「发送」：把提示词（含粘贴的图片）作为一条消息发到当前任务的会话
+export async function sendChatMessage(payload = {}) {
+  if (!taskId) return false
+  showPane('ai')
+  const extra = Array.isArray(payload.attachments) ? payload.attachments : []
+  if (extra.length) {
+    const room = ATT_MAX - pendingAttachments.length
+    if (room > 0) { pendingAttachments = pendingAttachments.concat(extra.slice(0, room)); renderAttachments() }
   }
+  const el = $('#chatInput')
+  if (el) { el.value = String(payload.text || ''); autosize() }
+  await send()
+  return true
+}
+
+export function currentChatSession() {
+  return { taskId, sessionId }
 }
 
 async function stop() {
+  // 停止前把尚未发出的队列内容回写到输入框，并清空队列
+  flushQueueToInput()
   if (!runId) return
-  try { await chatApi('stop', { runId }) } catch {}
-}
+  try { await chatApi('stop', { runId }) } catch {}}
 
 async function newSession() {
   if (!taskId) return
@@ -823,6 +1002,17 @@ export function handleEvent(ev) {
   if (ev.sessionId && sessionId && ev.sessionId !== sessionId) return
   if (ev.runId && !runId) runId = ev.runId
   const type = ev.type
+  if (type === 'featuremap') { emit('featuremap-updated', { taskId: ev.taskId, map: ev.map }); return }
+  if (type === 'aux') {
+    const meta = { title: ev.title || '辅助处理', status: ev.status || 'done', summary: ev.summary || '', details: ev.details || '' }
+    const existing = ev.messageId ? messages.find((m) => m.id === ev.messageId) : null
+    if (existing) { existing.kind = 'aux'; existing.role = 'assistant'; existing.meta = meta; existing.pending = false; existing.stream = false }
+    else messages.push({ id: ev.messageId || ('aux-' + Date.now()), role: 'assistant', kind: 'aux', content: '', meta })
+    renderAll()
+    scrollBottom(true)
+    return
+  }
+  if (type === 'board-sent') { emit('board-sent', ev.taskId); return }
   if (type === 'context') {
     messages.push({
       id: ev.messageId, role: 'assistant', kind: 'context', content: ev.summary || '',
@@ -942,12 +1132,17 @@ export function handleEvent(ev) {
     } else if (ev.content) {
       messages.push({
         role: 'assistant', kind: 'text', content: ev.content,
-        meta: { tokens: ev.tokens, parts: ev.parts, durationMs: ev.durationMs, plan: ev.plan || undefined }
+        meta: {
+          tokens: ev.tokens, parts: ev.parts, durationMs: ev.durationMs, plan: ev.plan || undefined,
+          inputTokens: ev.inputTokens, outputTokens: ev.outputTokens, cachedTokens: ev.cachedTokens
+        }
       })
       renderAll()
     }
     scrollBottom(true)
     if (!wasOrchestrate) refreshChatHeader()
+    // 本轮正常结束：若有排队消息，自动发出下一条（顺序接力，一条一轮）
+    drainIfQueued()
     return
   }
   if (type === 'child') {
@@ -991,6 +1186,11 @@ export function handleEvent(ev) {
   }
   if (type === 'brief') {
     if (info && info.task) info.task.brief = ev.brief
+    emit('brief-updated', { taskId: ev.taskId, brief: ev.brief })
+    return
+  }
+  if (type === 'keyinfo') {
+    emit('keyinfo-updated', { taskId: ev.taskId, content: ev.content })
     return
   }
   if (type === 'needKey') {
@@ -1072,6 +1272,9 @@ function closeStreamMsg(msg, ev) {
   if (msg.steps && msg.steps.length) meta.steps = msg.steps
   if (msg.plan && msg.plan.length) meta.plan = msg.plan
   if (ev && ev.tokens) meta.tokens = ev.tokens
+  if (ev && ev.inputTokens != null) meta.inputTokens = ev.inputTokens
+  if (ev && ev.outputTokens != null) meta.outputTokens = ev.outputTokens
+  if (ev && ev.cachedTokens != null) meta.cachedTokens = ev.cachedTokens
   meta.durationMs = (ev && ev.durationMs) || (msg.startedAt ? Date.now() - msg.startedAt : 0)
   msg.meta = meta
   if (ev && ev.content != null && ev.content !== '') msg.content = ev.content

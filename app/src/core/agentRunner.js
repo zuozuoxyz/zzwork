@@ -563,6 +563,8 @@ async function runClaude({ task, prompt, meta, selection, systemExtra, model, en
     if (!id || !onStep) return
     onStep({ id, ...patch })
   }
+  // 真实 token 用量（result 帧携带），回合结束时回传给调用方用于统计
+  let usage = null
   const handleLine = (line) => {
     line = line.trim(); if (!line) return
     let ev; try { ev = JSON.parse(line) } catch { onDelta(line + '\n'); return }
@@ -637,6 +639,7 @@ async function runClaude({ task, prompt, meta, selection, systemExtra, model, en
       }
     } else if (ev.type === 'result') {
       if (ev.session_id) onMeta && onMeta(sidKey, ev.session_id)
+      if (ev.usage) usage = ev.usage
       // result 是最后一帧；在此收尾，避免 close 时再回调一次 onDone（重复落库）
       finish(null, ev.result || '')
     }
@@ -666,7 +669,7 @@ async function runClaude({ task, prompt, meta, selection, systemExtra, model, en
     if (finished) return; finished = true
     try { child.stdin.end() } catch {}
     try { cleanupSettings && cleanupSettings() } catch {}
-    if (err) onError && onError(err); else onDone && onDone(result || '')
+    if (err) onError && onError(err); else onDone && onDone(result || '', usage)
   }
   child.stdout.on('data', (b) => {
     carry += decOut(b)
@@ -730,7 +733,12 @@ async function runGeneric({ task, agent, prompt, model, envVars, extraArgs, meta
   // 图片附件路径转为执行环境内可读形式（codex -i 用；其余执行体走文本后缀兜底）
   const imagePaths = (attachments || []).filter((a) => a && a.path).map((a) => toEnvPath(env, a.path))
   // 模板支持 {prompt}；没有占位符则把 prompt 作为尾参追加
-  const q = (s) => `"${String(s).replace(/"/g, '\\"')}"`
+  // Windows cmd.exe 用 "" 表示引号内字面引号（\" 会让引号提前闭合，导致 < > 被当成重定向）；POSIX 用 \"
+  const q = (s) => {
+    const str = String(s)
+    const esc = process.platform === 'win32' ? str.replace(/"/g, '""') : str.replace(/"/g, '\\"')
+    return `"${esc}"`
+  }
   // 远端 shell 用单引号，避免 $、反引号被展开
   const qPrompt = env.kind === 'local' ? q : posixQuote
   const extraEnv = Object.entries(envVars || {})

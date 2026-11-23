@@ -108,7 +108,7 @@ export function renderEnvs() {
     const connTxt = conn ? (conn.ok ? '已连接' : '连接失败') : (agents == null ? '未检测' : agents + ' 执行体')
     const sel = state.mode === 'item' && state.item && state.item.kind === 'env' && state.item.id === e.id
     return `<div class="item ${sel ? 'sel' : ''}" data-env="${esc(e.id)}">
-      <div class="top">${ic(k.icon, 14).replace('<i ', `<i style="color:${k.color};`)}<span class="nm">${esc(e.name)}</span>
+      <div class="top">${ic(k.icon, 14, k.color)}<span class="nm">${esc(e.name)}</span>
         <span class="dot ${dot}" title="${esc((conn && conn.message) || '')}"></span></div>
       <div class="meta"><span>${esc(desc)}</span><span>${connTxt}</span><span>${skills.length} skills</span></div>
     </div>`

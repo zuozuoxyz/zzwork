@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://localhost:* http://localhost:*; worker-src 'self' blob:">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' ws://localhost:* http://localhost:*; worker-src 'self' blob:; frame-src 'self' zzwork-file:">
 <title>zzwork</title>
 <link rel="stylesheet" href="./styles/theme.css">
 <link rel="stylesheet" href="./styles/layout.css">
@@ -27,12 +27,14 @@
         <input id="cmdInput" placeholder="过滤任务、Skills、MCP、模型" autocomplete="off" spellcheck="false">
       </div>
       <div style="flex:1"></div>
+      <button class="ib upd" id="updateBtn" hidden title="发现新版本"><i data-lucide="circle-arrow-up" style="width:14px;height:14px"></i></button>
       <button class="ib" id="termToggle" title="终端 (Ctrl+`)"><i data-lucide="square-terminal" style="width:14px;height:14px"></i></button>
     </div>
 
     <div class="body">
       <div class="ab" id="activitybar">
         <button class="abi on" data-view="projects" title="项目"><i data-lucide="folder-check" style="width:20px;height:20px"></i></button>
+        <button class="abi" data-view="board" title="看板"><i data-lucide="kanban-square" style="width:20px;height:20px"></i></button>
         <button class="abi" data-view="envs" title="环境"><i data-lucide="server" style="width:20px;height:20px"></i></button>
         <button class="abi" data-view="skills" title="Skills"><i data-lucide="wand-sparkles" style="width:20px;height:20px"></i></button>
         <button class="abi" data-view="mcp" title="MCP"><i data-lucide="plug" style="width:20px;height:20px"></i></button>
@@ -65,6 +67,14 @@
               <div class="pbody" id="filesTree"></div>
             </div>
           </div>
+        </div>
+
+        <div class="panel" id="panel-board">
+          <div class="phead"><span class="t">看板</span>
+            <button class="ib" id="boardNewBtn" title="新建卡片"><i data-lucide="square-plus" style="width:14px;height:14px"></i></button>
+            <button class="ib" id="boardRefreshBtn" title="刷新"><i data-lucide="rotate-cw" style="width:13px;height:13px"></i></button>
+          </div>
+          <div class="pbody" id="boardSideBody"></div>
         </div>
 
         <div class="panel" id="panel-envs">
@@ -112,15 +122,39 @@
         <div class="pane on" id="pane-info"><div class="pg" id="infoBody"></div></div>
 
         <div class="pane" id="pane-inbox">
-          <div class="inboxpane">
-            <div class="inboxbar">
-              <i data-lucide="sticky-note" style="width:13px;height:13px"></i>
-              <span class="t">需求便签</span>
-              <span class="hint" id="inboxHint">自动保存到工作区 .zzwork/inbox.md</span>
-              <span class="sp"></span>
-              <button class="btn sm" id="triageBtn"><i data-lucide="list-checks" style="width:13px;height:13px"></i>归类并执行</button>
+          <div class="inboxsplit">
+            <div class="inboxleft">
+              <div class="inboxpane">
+                <div class="inboxbar">
+                  <i data-lucide="sticky-note" style="width:13px;height:13px"></i>
+                  <span class="t">需求便签</span>
+                  <span class="hint" id="inboxHint">自动保存到工作区 .zzwork/inbox.md</span>
+                  <span class="sp"></span>
+                  <button class="btn sm" id="triageBtn"><i data-lucide="list-checks" style="width:13px;height:13px"></i>归类并执行</button>
+                </div>
+                <textarea id="inboxInput" placeholder="随手记录需求，每行一条；点击右上角归类并执行…" spellcheck="false"></textarea>
+              </div>
+              <div class="inboxvdiv" id="inboxVDiv" title="拖动调整上下"></div>
+              <div class="codepane">
+                <div class="inboxbar">
+                  <i data-lucide="folder-git" style="width:13px;height:13px"></i>
+                  <span class="t">代码任务</span>
+                  <span class="hint">全部 code 任务 · 点击跳转，可拖到右侧「已完成」</span>
+                  <span class="sp"></span>
+                  <span class="hint" id="codeCount"></span>
+                </div>
+                <div class="codeboard" id="inboxCodeTasks"></div>
+              </div>
             </div>
-            <textarea id="inboxInput" placeholder="随手记录需求，每行一条；点击右上角归类并执行…" spellcheck="false"></textarea>
+            <div class="inboxhdiv" id="inboxHDiv" title="拖动调整左右"></div>
+            <div class="inboxboardwrap">
+              <div class="inboxbar">
+                <i data-lucide="layout-list" style="width:13px;height:13px"></i>
+                <span class="t">全部任务</span>
+                <span class="hint">work 与看板任务 · 未完成 / 已完成</span>
+              </div>
+              <div class="inboxboard" id="inboxBoard"></div>
+            </div>
           </div>
         </div>
 
@@ -133,18 +167,32 @@
                 <span style="margin-left:auto;color:var(--faint)">自动保存</span>
               </div>
               <div class="lab2">提示词</div>
-              <textarea class="ptxt2" id="sessionPrompt" placeholder="补充本任务的系统提示词（保存在本机，不写入仓库）" spellcheck="false"></textarea>
+              <div class="sesprompt">
+                <div class="sesprompt-row">
+                  <div class="ptxt2 pe-editor" id="sessionPrompt" contenteditable="true" spellcheck="false" data-placeholder="补充本任务的系统提示词；可粘贴图片，点「发送」进入 AI 对话"></div>
+                  <button class="btn sm pri sespsend" id="sessionPromptSend" title="发送到 AI 对话">发送</button>
+                </div>
+              </div>
+              <div class="lab2">对话记录 · 仅显示你发送的内容，点击查看过程与结果</div>
+              <div class="seshist" id="sessionHistory"></div>
               <div class="lab2">改动 · 随消息一起发送</div>
               <div id="sessionChanges"></div>
             </div>
+            <div class="sesdivider" id="sesDivider" title="拖动调整宽度"></div>
             <div class="sescvs">
               <div class="ctools">
-                <button class="ib on" id="cvsPen" title="自由画笔"><i data-lucide="pen-tool" style="width:14px;height:14px"></i></button>
-                <button class="ib" id="cvsClear" title="清空"><i data-lucide="trash-2" style="width:14px;height:14px"></i></button>
-                <span class="lbl">画板</span>
+                <span class="ctitle hidden" id="ctTitle">画板</span>
+                <div class="seg" id="rightSeg">
+                  <button data-panel="map" class="on">功能图</button>
+                  <button data-panel="board">画板</button>
+                </div>
+                <span class="sp"></span>
+                <button class="bd-badge hidden" id="boardBadge" title="画板有改动，点击发送给 AI">画板有更新 · 发送给 AI</button>
               </div>
-              <div class="cvs"><canvas id="cvsCanvas"></canvas></div>
-              <div class="ccap"><i data-lucide="sparkles" style="width:11px;height:11px"></i>画板按结构化数据保存</div>
+              <div class="sright">
+                <div class="fmhost" id="featureMapHost"></div>
+                <div class="boardhost hidden" id="boardHost"></div>
+              </div>
             </div>
           </div>
         </div>
@@ -156,7 +204,7 @@
               <div class="chsess" id="aiSessionList"></div>
             </div>
             <div class="chat" id="chatScroll"><div class="inner" id="chatInner"></div></div>
-            <div class="comp"><div class="shellpanel" id="chatShells"></div><div class="attstrip" id="chatAttach"></div><div class="cwrap">
+            <div class="comp"><div class="shellpanel" id="chatShells"></div><div class="qstrip" id="chatQueue"></div><div class="attstrip" id="chatAttach"></div><div class="cwrap">
               <textarea class="inp" id="chatInput" rows="1" placeholder="继续发送…（Enter 发送，Shift+Enter 换行）" spellcheck="false"></textarea>
               <button class="stopbtn" id="chatStop">停止</button>
               <button class="send" id="chatSend">发送</button>
@@ -164,9 +212,10 @@
           </div></div>
         </div>
 
-        <div class="pane" id="pane-file"><div id="editorHost"></div></div>
+        <div class="pane" id="pane-file"><div id="editorHost"></div><div id="previewHost"></div><div class="filetoolbar" id="fileBar" style="display:none"></div></div>
         <div class="pane" id="pane-item"><div class="setbody" id="itemBody"></div></div>
         <div class="pane" id="pane-settings"><div class="setbody" id="settingsBody"></div></div>
+        <div class="pane" id="pane-board"><div class="boardpane" id="boardBody"></div></div>
 
         <div class="term-panel" id="termPanel">
           <div class="term-grip" id="termResize"></div>
@@ -189,7 +238,7 @@
       <span class="lf" id="stTask">未选择任务</span>
       <span class="s"></span>
       <span id="stRight"></span>
-      <span id="stVersion">zzwork 0.4</span>
+      <span id="stVersion">zzwork 0.5.0</span>
     </div>
   </div>
 

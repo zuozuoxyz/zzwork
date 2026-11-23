@@ -30,13 +30,13 @@ export function renderModels() {
     if (!hitProvider && !shown.length) continue
     const selP = state.mode === 'item' && state.item && state.item.kind === 'provider' && state.item.id === p.id
     parts.push(`<div class="item ${selP ? 'sel' : ''}" data-provider="${esc(p.id)}">
-      <div class="top">${ic('server', 14).replace('<i ', `<i style="color:#c9b25e;`)}<span class="nm">${esc(p.name)}</span></div>
+      <div class="top">${ic('server', 14, '#c9b25e')}<span class="nm">${esc(p.name)}</span></div>
       <div class="meta"><span>${esc(typeLabel(p.type))}</span><span>${shown.length} 个模型</span></div>
     </div>`)
     for (const m of shown) {
       const selM = state.mode === 'item' && state.item && state.item.kind === 'model' && state.item.id === m.id
       parts.push(`<div class="item ${selM ? 'sel' : ''}" data-model="${esc(m.id)}" style="padding-left:26px">
-        <div class="top">${ic('cpu', 13).replace('<i ', `<i style="color:${m.is_default ? '#7dd3fc' : '#8b8f93'};`)}<span class="nm">${esc(m.name)}</span>${m.is_default ? '<span class="pill b">默认</span>' : ''}</div>
+        <div class="top">${ic('cpu', 13, m.is_default ? '#7dd3fc' : '#8b8f93')}<span class="nm">${esc(m.name)}</span>${m.is_default ? '<span class="pill b">默认</span>' : ''}</div>
         <div class="meta"><span>${esc(m.model_id)}</span></div>
       </div>`)
     }

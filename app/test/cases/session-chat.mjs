@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { startFakeAI, sleep } from '../harness.mjs'
-import { selectTask, setView, ensureTask } from './_helpers.mjs'
+import { selectTask, setView, ensureTask, createTaskUI } from './_helpers.mjs'
 
 const AGENT_FIXTURE = fileURLToPath(new URL('../fixtures/fake-agent.cjs', import.meta.url))
 const CODEX_FIXTURE = fileURLToPath(new URL('../fixtures/fake-codex.cjs', import.meta.url))
@@ -119,7 +119,7 @@ export default [
         await openAiTab(app)
         await sendChat(app, '流式测试')
         await app.waitFor(`[...document.querySelectorAll('.msg.a .abody')].some(b=>b.textContent.includes('你好，我是测试模型。'))`, 20000, '流式回复渲染')
-        await app.waitFor(`document.querySelector('#chatSend').style.display !== 'none'`, 15000, '发送按钮恢复')
+        await app.waitFor(`document.querySelector('#chatStop').style.display === 'none'`, 15000, '回合结束（停止按钮隐藏）')
         const msgs = await messagesOf(app, t.id)
         const last = msgs[msgs.length - 1]
         assert.equal(last.role, 'assistant')
@@ -229,9 +229,19 @@ export default [
         await app.waitFor(`[...document.querySelectorAll('.msg.a .abody')].some(b=>b.textContent.includes('CODEX-FAKE 收到：codex你好'))`, 20000, 'codex 答复渲染')
         await app.waitFor(`[...document.querySelectorAll('.workbox .thinktext')].some(e=>e.textContent.includes('CODEX-THINK'))`, 10000, 'codex 思考过程渲染')
         await app.waitFor(`[...document.querySelectorAll('.workbox .strow')].some(r=>r.textContent.includes('命令') && r.textContent.includes('ls'))`, 10000, 'codex 运行过程渲染')
+        // 定位本条 codex 答复（而非最后一条气泡），并等到工作框与正文同处一个 parts
+        const replySel = `[...document.querySelectorAll('#chatInner .msg.a')].find((m) => m.querySelector('.abody') && m.querySelector('.abody').textContent.includes('CODEX-FAKE 收到：codex你好'))`
+        await app.waitFor(`(() => {
+          const el = ${replySel}
+          if (!el) return false
+          const parts = el.querySelector('.parts')
+          if (!parts) return false
+          const cls = [...parts.children].map((c) => String(c.className).split(' ')[0])
+          return cls.includes('workbox') && cls.includes('abody')
+        })()`, 10000, 'codex 答复含工作框与正文')
         const order = await app.call(() => {
-          const msgs = document.querySelectorAll('#chatInner .msg.a')
-          const el = msgs[msgs.length - 1]
+          const msgs = [...document.querySelectorAll('#chatInner .msg.a')]
+          const el = msgs.find((m) => m.querySelector('.abody') && m.querySelector('.abody').textContent.includes('CODEX-FAKE 收到：codex你好'))
           const parts = el && el.querySelector('.parts')
           return parts ? Array.from(parts.children).map((c) => String(c.className).split(' ')[0]) : []
         })
@@ -239,12 +249,17 @@ export default [
         assert.ok(order.indexOf('workbox') < order.indexOf('abody'), '工作框应在正文之前: ' + order)
         const txt = await app.call(() => document.querySelector('#chatInner').textContent)
         assert.ok(!txt.includes('CODEX-NOISE'), '命令输出等噪音不应出现在对话里')
+        // 流式正文先于落库出现，等最终消息写入后再断言，避免读库竞态
+        await app.waitFor(`(async () => {
+          const l = await window.zzwork.invoke('store','messages.list',{ taskId: ${JSON.stringify(t.id)} })
+          return l.some(m => m.role==='assistant' && String(m.content||'').includes('CODEX-FAKE 收到：codex你好'))
+        })()`, 15000, 'codex 答复落库')
         const msgs = await messagesOf(app, t.id)
-        const last = msgs[msgs.length - 1]
-        assert.ok(last.content.includes('CODEX-FAKE 收到：codex你好'))
-        assert.ok(!last.content.includes('CODEX-NOISE'))
-        assert.ok(String(last.meta || '').includes('CODEX-THINK'), '思考过程应随消息落库')
-        assert.ok(String(last.meta || '').includes('ls'), '运行步骤应随消息落库')
+        const reply = msgs.filter((m) => m.role === 'assistant' && String(m.content || '').includes('CODEX-FAKE 收到：codex你好')).pop()
+        assert.ok(reply, 'codex 答复应落库')
+        assert.ok(!String(reply.content || '').includes('CODEX-NOISE'))
+        assert.ok(String(reply.meta || '').includes('CODEX-THINK'), '思考过程应随消息落库')
+        assert.ok(String(reply.meta || '').includes('ls'), '运行步骤应随消息落库')
       } finally {
         await app.store('agents.save', { list: agents })
         await bindTask(app, '主任务改名', { agent_id: 'builtin' })
@@ -459,6 +474,16 @@ export default [
       assert.ok(String(claudeLast.meta || '').includes('CLAUDE-THINK'), 'Claude 思考过程应落库')
       assert.ok(String(claudeLast.meta || '').includes('echo hi'), 'Claude 运行步骤应落库')
       assert.ok(String(claudeLast.meta || '').includes('执行命令'), '待办计划应落库')
+      // 真实用量：input=12+500(读缓存)+100(写缓存)=612，output=34，cached=500
+      const cMeta = JSON.parse(claudeLast.meta || '{}')
+      assert.equal(Number(cMeta.inputTokens), 612, 'Claude 输入 token 应取真实用量（含缓存读/写）')
+      assert.equal(Number(cMeta.outputTokens), 34, 'Claude 输出 token 应取真实用量')
+      assert.equal(Number(cMeta.cachedTokens), 500, 'Claude 缓存 token 应取 cache_read')
+      const cRuns = await app.store('runs.list', { taskId: t.id, sessionId: claudeLast.session_id })
+      const cLastRun = cRuns[cRuns.length - 1]
+      assert.equal(Number(cLastRun.input_tokens), 612, 'runs 应落盘真实输入 token')
+      assert.equal(Number(cLastRun.output_tokens), 34, 'runs 应落盘真实输出 token')
+      assert.equal(Number(cLastRun.cached_tokens), 500, 'runs 应落盘真实缓存 token')
       const sessions = await app.store('sessions.list', { taskId: t.id })
       assert.ok(sessions.some((s) => String(s.meta || '').includes('fake-claude-session')), '应记录 claude 会话 id')
       await bindTask(app, '主任务改名', { agent_id: 'builtin' })
@@ -500,9 +525,13 @@ export default [
       await app.call(() => { const b = document.querySelector('.askcard [data-ask-submit]'); if (b) b.click() })
       await app.waitFor(`[...document.querySelectorAll('.msg.a .abody')].some(b=>b.textContent.includes('已回答：A 选项'))`, 20000, '回答后继续输出')
       await app.waitFor(`(() => { const c=document.querySelector('.askcard'); return !!c && c.textContent.includes('已回答') })()`, 8000, '卡片进入已回答状态')
+      // 流式正文先于落库出现，等最终消息写入后再断言，避免读库竞态
+      await app.waitFor(`(async () => {
+        const l = await window.zzwork.invoke('store','messages.list',{ taskId: ${JSON.stringify(t.id)} })
+        return l.some(m => m.role==='assistant' && String(m.content||'').includes('已回答：A 选项'))
+      })()`, 15000, '回答反馈落库')
       const msgs = await messagesOf(app, t.id)
-      const last = msgs[msgs.length - 1]
-      assert.ok(last.content.includes('已回答：A 选项'), '回答应反馈给模型并落库')
+      assert.ok(msgs.some((m) => m.content.includes('已回答：A 选项')), '回答应反馈给模型并落库')
       await bindTask(app, '主任务改名', { agent_id: 'builtin' })
     }
   },
@@ -513,7 +542,12 @@ export default [
       await selectTask(app, '主任务改名')
       await app.click('.tab[data-pane="session"]')
       await app.waitFor(`(() => { const l=document.querySelector('#sessionLabel'); return !!l && l.textContent.includes('当前会话') })()`, 8000, '会话面板加载')
-      await app.setValue('#sessionPrompt', '请使用简洁的中文回答')
+      await app.call(() => {
+        const ed = document.querySelector('#sessionPrompt')
+        ed.textContent = '请使用简洁的中文回答'
+        ed.dispatchEvent(new Event('input', { bubbles: true }))
+        return true
+      })
       await app.waitFor(`(async () => {
         const v = await window.zzwork.invoke('store', 'settings.get', { key: ${JSON.stringify('session:prompt:' + t.id)}, dflt: '' })
         return v === '请使用简洁的中文回答'
@@ -528,14 +562,16 @@ export default [
       const t = await taskByName(app, '主任务改名')
       await selectTask(app, '主任务改名')
       await app.click('.tab[data-pane="session"]')
+      await app.waitFor(`(() => { const b = document.querySelector('#boardHost'); return !!b && !b.classList.contains('hidden') })()`, 5000, '画板面板显示')
+      await app.click('#boardHost [data-tool="rect"]')
       await app.call(() => {
-        const c = document.querySelector('#cvsCanvas')
+        const c = document.querySelector('#bdSvg')
         c.setPointerCapture = () => {}
         const r = c.getBoundingClientRect()
-        const ev = (type, x, y) => c.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, clientX: x, clientY: y }))
-        ev('pointerdown', r.left + 20, r.top + 20)
-        ev('pointermove', r.left + 50, r.top + 60)
-        ev('pointerup', r.left + 50, r.top + 60)
+        const ev = (type, x, y) => c.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, button: 0, clientX: x, clientY: y }))
+        ev('pointerdown', r.left + 30, r.top + 30)
+        ev('pointermove', r.left + 120, r.top + 90)
+        ev('pointerup', r.left + 120, r.top + 90)
         return true
       })
       await app.waitFor(`(async () => {
@@ -543,15 +579,15 @@ export default [
         if (!raw) return false
         try {
           const d = JSON.parse(raw)
-          return Array.isArray(d.strokes) && d.strokes.length >= 1
+          return d.v === 2 && Array.isArray(d.shapes) && d.shapes.length >= 1
         } catch { return false }
-      })()`, 5000, '画板数据保存')
-      await app.click('#cvsClear')
+      })()`, 6000, '画板 v2 数据保存')
+      await app.click('#bdClear')
       await app.waitFor(`(async () => {
         const raw = await window.zzwork.invoke('store', 'settings.get', { key: ${JSON.stringify('session:canvas:' + t.id)}, dflt: '' })
-        const d = raw ? JSON.parse(raw) : { strokes: [] }
-        return !d.strokes || d.strokes.length === 0
-      })()`, 5000, '画板清空')
+        const d = raw ? JSON.parse(raw) : { shapes: [] }
+        return !d.shapes || d.shapes.length === 0
+      })()`, 6000, '画板清空')
     }
   },
   {
@@ -713,6 +749,247 @@ export default [
       await app.pressKey({ key: 'ArrowDown', code: 'ArrowDown', keyCode: 40 })
       await app.pressKey({ key: 'Enter', code: 'Enter', keyCode: 13 })
       await app.waitFor(`document.querySelector('#chatInput').value.trim() === '@navdir/inner.md'`, 5000, '确认后填入子文件路径')
+    }
+  },
+  {
+    name: '运行中发送进入队列，AI 结束后自动接力',
+    async run(app) {
+      const first = Array.from({ length: 10 }, (_, i) => `慢${i + 1}`)
+      const server = await startFakeAI({
+        delay: 200,
+        respond: (parsed, index) => {
+          const msgs = parsed.messages || []
+          const last = msgs[msgs.length - 1]
+          const txt = (last && last.content) || ''
+          if (index === 1) return first
+          return ['回声：' + txt]
+        }
+      })
+      try {
+        const setup = await setupProviderModel(app, { url: server.url, name: '队列提供方' })
+        const t = await bindTask(app, '主任务改名', { agent_id: 'builtin', model_id: setup.mid })
+        await selectTask(app, '主任务改名')
+        await openAiTab(app)
+        await sendChat(app, '队列第一条')
+        await app.waitFor(`document.querySelector('#chatStop').style.display !== 'none'`, 10000, '运行中显示停止')
+        // 运行中继续发送 → 进入队列、显示在输入框上方
+        await app.setValue('#chatInput', '排队的第二条')
+        await app.click('#chatSend')
+        await app.waitFor(`!!document.querySelector('#chatQueue.on')`, 5000, '队列面板出现')
+        await app.waitFor(`[...document.querySelectorAll('#chatQueue .qrow .qt')].some(e=>e.textContent.includes('排队的第二条'))`, 5000, '队列显示排队的消息')
+        // 第一轮结束后自动接力发出队列消息
+        await app.waitFor(`[...document.querySelectorAll('.msg.u .bub')].some(b=>b.textContent.includes('排队的第二条'))`, 20000, '排队消息作为新一轮发出')
+        await app.waitFor(`[...document.querySelectorAll('.msg.a .abody')].some(b=>b.textContent.includes('回声：排队的第二条'))`, 20000, '排队消息得到回复')
+        await app.waitFor(`!document.querySelector('#chatQueue.on')`, 8000, '队列耗尽后隐藏')
+        const msgs = await messagesOf(app, t.id)
+        assert.ok(msgs.some((m) => m.role === 'user' && String(m.content).includes('排队的第二条')), '排队消息应落库')
+      } finally {
+        await server.close()
+        await bindTask(app, '主任务改名', { model_id: '' })
+      }
+    }
+  },
+  {
+    name: '排队消息可取消；停止时队列回写到输入框',
+    async run(app) {
+      const first = Array.from({ length: 12 }, (_, i) => `慢${i + 1}`)
+      const server = await startFakeAI({ delay: 200, respond: (parsed, index) => (index === 1 ? first : ['回声']) })
+      try {
+        const setup = await setupProviderModel(app, { url: server.url, name: '队列停止提供方' })
+        await bindTask(app, '主任务改名', { agent_id: 'builtin', model_id: setup.mid })
+        await selectTask(app, '主任务改名')
+        await openAiTab(app)
+        await sendChat(app, '停止队列第一条')
+        await app.waitFor(`document.querySelector('#chatStop').style.display !== 'none'`, 10000, '运行中')
+        await app.setValue('#chatInput', '排队甲')
+        await app.click('#chatSend')
+        await app.setValue('#chatInput', '排队乙')
+        await app.click('#chatSend')
+        await app.waitFor(`document.querySelectorAll('#chatQueue .qrow').length === 2`, 5000, '两条排队')
+        // 取消「排队乙」
+        await app.call(() => {
+          const row = [...document.querySelectorAll('#chatQueue .qrow')].find((r) => r.textContent.includes('排队乙'))
+          const btn = row && row.querySelector('[data-qrm]')
+          if (btn) btn.click()
+        })
+        await app.waitFor(`document.querySelectorAll('#chatQueue .qrow').length === 1`, 5000, '取消后剩一条')
+        await app.waitFor(`[...document.querySelectorAll('#chatQueue .qt')].some(e=>e.textContent.includes('排队甲'))`, 5000, '剩余为排队甲')
+        // 停止：队列回写到输入框并清空
+        await app.click('#chatStop')
+        await app.waitFor(`document.querySelector('#chatInput').value.includes('排队甲')`, 5000, '停止后队列回写输入框')
+        await app.waitFor(`!document.querySelector('#chatQueue.on')`, 5000, '停止后队列清空')
+      } finally {
+        await server.close()
+        await bindTask(app, '主任务改名', { model_id: '' })
+      }
+    }
+  },
+  {
+    name: '跨任务询问：@@ASK 协议作答，标记不外泄',
+    async run(app) {
+      const server = await startFakeAI({
+        delay: 20,
+        respond(parsed) {
+          const msgs = (parsed && parsed.messages) || []
+          const sys = String((msgs[0] && msgs[0].content) || '')
+          const lastUser = [...msgs].reverse().find((m) => m.role === 'user')
+          const lu = lastUser ? String(lastUser.content || '') : ''
+          if (sys.includes('当前任务「资料库B」')) return ['关键配置：答案是42。']
+          if (lu.includes('跨任务询问结果')) return ['根据资料库B，答案是42。']
+          return ['我需要确认一下：@@ASK{"task":"资料库B","q":"关键配置是什么"}@@']
+        }
+      })
+      const setup = await setupProviderModel(app, { url: server.url, name: '跨任务提供方' })
+      let a = null
+      let b = null
+      try {
+        a = await createTaskUI(app, { name: '问询方A', type: 'work' })
+        b = await createTaskUI(app, { name: '资料库B', type: 'work' })
+        await app.store('tasks.update', { id: a.id, patch: { agent_id: 'builtin', model_id: setup.mid } })
+        await app.store('tasks.update', { id: b.id, patch: { agent_id: 'builtin', model_id: setup.mid } })
+        const init = await app.invoke('chat', 'init', { taskId: a.id })
+        const sent = await app.invoke('chat', 'send', { taskId: a.id, sessionId: init.session.id, text: '请告诉我关键配置' })
+        await app.waitFor(`(async () => {
+          const r = await window.zzwork.invoke('store', 'runs.get', { id: ${JSON.stringify(sent.runId)} })
+          return !!(r && r.status !== 'running')
+        })()`, 30000, '问询方运行结束')
+        const msgs = await app.store('messages.list', { taskId: a.id })
+        const last = [...msgs].reverse().find((m) => m.role === 'assistant')
+        assert.ok(last, '应有助手回复')
+        assert.ok(String(last.content).includes('答案是42'), '应使用对方答复继续作答：' + last.content)
+        assert.ok(!String(last.content).includes('@@ASK'), '协议标记不应进入对话内容：' + last.content)
+        // 目标任务拿到一个隐藏的 ask 会话；init 列表不暴露该会话
+        const bSessions = await app.store('sessions.list', { taskId: b.id })
+        assert.ok(bSessions.some((s) => s.kind === 'ask'), '目标任务应创建隐藏 ask 会话')
+        const initB = await app.invoke('chat', 'init', { taskId: b.id })
+        assert.ok((initB.sessions || []).every((s) => s.kind !== 'ask'), 'init 不应暴露 ask 会话')
+      } finally {
+        await server.close()
+        try { if (a) await app.store('tasks.delete', { id: a.id }) } catch {}
+        try { if (b) await app.store('tasks.delete', { id: b.id }) } catch {}
+        try { await app.store('providers.delete', { id: setup.pid }) } catch {}
+      }
+    }
+  },
+  {
+    name: '看板任务不能被跨任务询问',
+    async run(app) {
+      const board = await app.invoke('board', 'create', { title: '看板不可问', content: 'x' })
+      let a = null
+      try {
+        a = await createTaskUI(app, { name: '发问者C', type: 'work' })
+        const r = await app.invoke('chat', 'askTask', { fromTaskId: a.id, targetTaskId: board.id, question: '在吗' })
+        assert.equal(r.ok, false, '看板任务不应被询问')
+        assert.ok(String(r.error || '').includes('看板'), '应提示看板任务不可询问：' + r.error)
+      } finally {
+        try { if (a) await app.store('tasks.delete', { id: a.id }) } catch {}
+        try { await app.store('tasks.delete', { id: board.id }) } catch {}
+      }
+    }
+  },
+  {
+    name: '分层询问清单：本组带完整简介+关键信息名称，其他组带组简介（含各任务一句话说明）',
+    async run(app) {
+      let reqSeen = ''
+      const server = await startFakeAI({
+        delay: 10,
+        respond(parsed) {
+          const msgs = (parsed && parsed.messages) || []
+          const sys = String((msgs[0] && msgs[0].content) || '')
+          if (sys.includes('分组简介生成器')) {
+            return ['【组简介】\nB组负责集中存放资料\n【任务】\n- 资料库B：存放关键配置与账号']
+          }
+          // 跨任务清单现在拼在最后一条用户消息里（而非 system），抓全量请求文本断言
+          reqSeen = msgs.map((m) => String(m.content || '')).join('\n')
+          return ['收到。']
+        }
+      })
+      const setup = await setupProviderModel(app, { url: server.url, name: '分层提供方' })
+      let gA = null
+      let gB = null
+      let cur = null
+      let sib = null
+      let tB = null
+      try {
+        gA = await app.store('groups.create', { name: 'A组' })
+        gB = await app.store('groups.create', { name: 'B组' })
+        cur = await createTaskUI(app, { name: '当前任务', type: 'code' })
+        sib = await createTaskUI(app, { name: 'A组兄弟', type: 'work' })
+        tB = await createTaskUI(app, { name: '资料库B', type: 'work' })
+        await app.store('tasks.update', { id: cur.id, patch: { group_id: gA.id, agent_id: 'builtin', model_id: setup.mid } })
+        await app.store('tasks.update', {
+          id: sib.id,
+          patch: { group_id: gA.id, brief: '负责A组兄弟的完整简介内容', meta: JSON.stringify({ keyinfoNames: ['数据库账号', '接口密钥'] }) }
+        })
+        await app.store('tasks.update', { id: tB.id, patch: { group_id: gB.id, brief: '存放B组资料' } })
+        // 生成 B 组简介（fake AI 返回整体职责 + 各任务一句话说明）
+        const gb = await app.invoke('chat', 'groupBrief', { groupId: gB.id })
+        assert.ok(gb && gb.ok, '组简介应生成成功')
+        const gbRow = await app.store('groups.get', { id: gB.id })
+        assert.ok(String(gbRow.brief || '').includes('资料库B：存放关键配置'), '组简介应含各任务一句话说明：' + gbRow.brief)
+
+        const init = await app.invoke('chat', 'init', { taskId: cur.id })
+        const sent = await app.invoke('chat', 'send', { taskId: cur.id, sessionId: init.session.id, text: '开始' })
+        await app.waitFor(`(async () => {
+          const r = await window.zzwork.invoke('store', 'runs.get', { id: ${JSON.stringify(sent.runId)} })
+          return !!(r && r.status !== 'running')
+        })()`, 30000, '当前任务运行结束')
+
+        assert.ok(reqSeen.includes('【本组'), '应含本组分区：' + reqSeen)
+        assert.ok(reqSeen.includes('A组兄弟：负责A组兄弟的完整简介内容'), '本组兄弟应带完整简介')
+        assert.ok(reqSeen.includes('掌握：数据库账号、接口密钥'), '本组兄弟应带关键信息名称（仅名称）')
+        assert.ok(reqSeen.includes('【其他组】'), '应含其他组分区')
+        assert.ok(reqSeen.includes('资料库B：存放关键配置'), '其他组应带组简介含各任务一句话说明')
+      } finally {
+        await server.close()
+        try { if (cur) await app.store('tasks.delete', { id: cur.id }) } catch {}
+        try { if (sib) await app.store('tasks.delete', { id: sib.id }) } catch {}
+        try { if (tB) await app.store('tasks.delete', { id: tB.id }) } catch {}
+        try { if (gA) await app.store('groups.delete', { id: gA.id }) } catch {}
+        try { if (gB) await app.store('groups.delete', { id: gB.id }) } catch {}
+        try { await app.store('providers.delete', { id: setup.pid }) } catch {}
+      }
+    }
+  },
+  {
+    name: '回合结束记录输入/输出/缓存 token 统计并落盘',
+    async run(app) {
+      const server = await startFakeAI({
+        delay: 10,
+        chunks: ['答复内容'],
+        usage: { prompt_tokens: 1200, completion_tokens: 340, total_tokens: 1540, prompt_tokens_details: { cached_tokens: 900 } }
+      })
+      const setup = await setupProviderModel(app, { url: server.url, name: '统计提供方' })
+      let t = null
+      try {
+        t = await createTaskUI(app, { name: '统计任务', type: 'work' })
+        await app.store('tasks.update', { id: t.id, patch: { agent_id: 'builtin', model_id: setup.mid } })
+        const init = await app.invoke('chat', 'init', { taskId: t.id })
+        const sent = await app.invoke('chat', 'send', { taskId: t.id, sessionId: init.session.id, text: '你好' })
+        await app.waitFor(`(async () => {
+          const r = await window.zzwork.invoke('store', 'runs.get', { id: ${JSON.stringify(sent.runId)} })
+          return !!(r && r.status !== 'running')
+        })()`, 30000, '运行结束')
+        const run = await app.store('runs.get', { id: sent.runId })
+        assert.equal(Number(run.input_tokens), 1200, '输入 token')
+        assert.equal(Number(run.output_tokens), 340, '输出 token')
+        assert.equal(Number(run.cached_tokens), 900, '缓存 token')
+        // 会话累计：input+output 应可在 runs.list 聚合
+        const runs = await app.store('runs.list', { taskId: t.id, sessionId: init.session.id })
+        const total = (runs || []).reduce((n, r) => n + ((r.input_tokens || 0) + (r.output_tokens || 0) || (r.tokens || 0)), 0)
+        assert.equal(total, 1540, '会话累计 token')
+        // 助手消息 meta 落盘，刷新后仍可显示
+        const msgs = await app.store('messages.list', { taskId: t.id })
+        const last = [...msgs].reverse().find((m) => m.role === 'assistant')
+        const meta = typeof last.meta === 'string' ? JSON.parse(last.meta) : last.meta
+        assert.equal(Number(meta.inputTokens), 1200, '消息输入 token')
+        assert.equal(Number(meta.outputTokens), 340, '消息输出 token')
+        assert.equal(Number(meta.cachedTokens), 900, '消息缓存 token')
+      } finally {
+        await server.close()
+        try { if (t) await app.store('tasks.delete', { id: t.id }) } catch {}
+        try { await app.store('providers.delete', { id: setup.pid }) } catch {}
+      }
     }
   }
 ]

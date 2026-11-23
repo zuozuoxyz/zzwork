@@ -37,7 +37,7 @@ export function renderSkills() {
   body.innerHTML = `<div class="hint">自动扫描 ~/.zzwork/skills、.agents 与 .claude</div>` + list.map((s) => {
     const sel = state.mode === 'item' && state.item && state.item.kind === 'skill' && state.item.id === s.id
     return `<div class="item ${sel ? 'sel' : ''}" data-skill="${esc(s.id)}">
-      <div class="top">${ic('file-text', 14).replace('<i ', '<i style="color:#2dd4bf;')}<span class="nm">${esc(s.name)}</span></div>
+      <div class="top">${ic('file-text', 14, '#2dd4bf')}<span class="nm">${esc(s.name)}</span></div>
       <div class="meta"><span class="tag2">${esc(sourceOf(s.path))}</span><span>${esc(s.description || s.path)}</span></div>
     </div>`
   }).join('')

@@ -1,7 +1,12 @@
-const { app, BrowserWindow, shell } = require('electron')
+const { app, BrowserWindow, shell, protocol } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const { registerAll } = require('./ipc')
+
+// HTML 预览：任务内文件经自定义标准协议加载，相对资源（css/js/图片）可正常解析
+protocol.registerSchemesAsPrivileged([
+  { scheme: 'zzwork-file', privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } }
+])
 
 app.setName('zzwork')
 

@@ -1,14 +1,28 @@
 // 任务信息 pane
 import { store, fsapi, chat as chatApi, env as envApi } from '../lib/api.js'
-import { state, activeTask, taskMeta, emit } from '../lib/state.js'
+import { state, activeTask, taskMeta, emit, on } from '../lib/state.js'
 import { $, esc, ic, refreshIcons, envLabelFromPath, joinPath, debounce, fmtTime } from '../lib/ui.js'
 import { reloadTasks } from '../lib/data.js'
 import { toast } from '../components/toast.js'
 import { openModal } from '../components/modal.js'
 import { showContextMenu } from '../components/contextMenu.js'
 
+// 大模型回合结束后自动同步的简介 / 关键信息（无需手动刷新）
+on('brief-updated', ({ taskId, brief }) => {
+  if (state.taskId !== taskId) return
+  const cell = document.querySelector('#infoBody .briefcell .v')
+  if (cell) cell.textContent = brief || '（暂无简介，对话结束后会自动更新）'
+})
+on('keyinfo-updated', ({ taskId, content }) => {
+  if (state.taskId !== taskId) return
+  const box = document.getElementById('keyinfoBox')
+  if (!box || document.activeElement === box || box.value === content) return
+  box.value = content
+})
+
 let renderSeq = 0
 const detecting = new Set()
+const STATUS_OPTIONS = [['active', '进行中'], ['paused', '已暂停'], ['done', '已完成']]
 
 // 任务路径 -> 所在环境（与主进程 resolveTaskEnv 对齐）
 export function taskEnvDesc(task) {
@@ -81,14 +95,16 @@ export async function renderInfo() {
     store('groups.list').catch(() => state.groups)
   ])
   const groupList = groups || state.groups
+  const groupById = new Map((groupList || []).map((g) => [g.id, g]))
+  const groupLabel = (g) => { const parts = []; let c = g, n = 0; while (c && n++ < 50) { parts.unshift(c.name); c = c.parent_id ? groupById.get(c.parent_id) : null } return parts.join(' / ') }
   if (seq !== renderSeq) return
-  const memoryPath = joinPath(task.path, '.zzwork/memory.md')
-  let memory = ''
+  const keyinfoPath = joinPath(task.path, '.zzwork/keyinfo.md')
+  let keyinfo = ''
   try {
-    if (await fsapi('exists', { path: memoryPath })) memory = await fsapi('readFile', { path: memoryPath })
-  } catch { memory = '' }
+    if (await fsapi('exists', { path: keyinfoPath })) keyinfo = await fsapi('readFile', { path: keyinfoPath })
+  } catch { keyinfo = '' }
 
-  const topSessions = sessions.filter((s) => s.kind !== 'subagent')
+  const topSessions = sessions.filter((s) => s.kind !== 'subagent' && s.kind !== 'ask')
   const sessionRows = topSessions.length ? topSessions.map((s) => `<div class="sessrow" data-session="${esc(s.id)}" title="点击打开，右键更多操作">
       ${ic(s.kind === 'subagent' ? 'bot' : 'messages-square', 12)}
       <span class="sn">${esc(s.title || '会话')}${s.summary ? ' · <span style="color:var(--faint)">' + esc(s.summary.slice(0, 48)) + '</span>' : ''}</span>
@@ -96,6 +112,10 @@ export async function renderInfo() {
     : `<div class="hint">还没有会话，去 AI 对话发送第一条消息。</div>`
 
   const meta = taskMeta(task)
+  const status = task.status || 'active'
+  const statusOpts = STATUS_OPTIONS.some(([v]) => v === status)
+    ? STATUS_OPTIONS
+    : STATUS_OPTIONS.concat([[status, status]])
   const envLabel = meta.envLabel || envLabelFromPath(task.path)
   const group = state.groups.find((g) => g.id === task.group_id)
   const envDesc = taskEnvDesc(task)
@@ -136,10 +156,9 @@ export async function renderInfo() {
   const skillEnvId = envDesc.kind === 'local' ? 'global' : envDesc.id
   const skills = state.skills.filter((s) => s.env_id === skillEnvId)
   const mcps = state.mcp.filter((m) => m.env_id === 'global' || (envDesc.kind !== 'local' && m.env_id === envDesc.id))
-  const skillRows = skills.length ? skills.map((s) => `<label class="chkrow">
+  const skillRows = skills.length ? skills.map((s) => `<label class="chkchip${exSkills.includes(s.id) ? ' off' : ''}" title="${esc(s.description || s.name)}">
       <input type="checkbox" data-skill="${esc(s.id)}" ${exSkills.includes(s.id) ? '' : 'checked'}>
-      <span class="nm">${esc(s.name)}</span>
-      <span class="ds">${esc(s.description || '')}</span></label>`).join('')
+      <span>${esc(s.name)}</span></label>`).join('')
     : `<div class="hint">未发现 Skills，可在 Skills 视图扫描</div>`
   const mcpRows = mcps.length ? mcps.map((m) => `<label class="chkrow">
       <input type="checkbox" data-mcp="${esc(m.id)}" ${exMcp.includes(m.id) ? '' : 'checked'}>
@@ -150,7 +169,9 @@ export async function renderInfo() {
   body.innerHTML = `
     <div class="hd"><h2>${esc(task.name)}</h2>
       <span class="pill b">${esc(task.type)}</span>
-      <span class="pill g">${task.status === 'active' ? '进行中' : esc(task.status)}</span>
+      <select class="pill-sel st-${esc(status)}" id="statusSel" title="任务状态">
+        ${statusOpts.map(([v, label]) => `<option value="${esc(v)}" ${v === status ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+      </select>
       <span class="pill">${esc(envLabel)}</span>
       <span style="margin-left:auto;display:flex;gap:6px">
         <button class="btn sm" id="openTaskDir">${ic('folder-open', 11)} 打开目录</button>
@@ -160,7 +181,7 @@ export async function renderInfo() {
       <div class="cell"><div class="k">所属组</div><div class="v">
         <select class="sel2" id="groupSel">
           <option value="">（不分组）</option>
-          ${groupList.map((g) => `<option value="${esc(g.id)}" ${g.id === task.group_id ? 'selected' : ''}>${esc(g.name)}</option>`).join('')}
+          ${groupList.map((g) => `<option value="${esc(g.id)}" ${g.id === task.group_id ? 'selected' : ''}>${esc(groupLabel(g))}</option>`).join('')}
         </select></div></div>
       <div class="cell"><div class="k">执行体</div><div class="v">
         <select class="sel2" id="agentSel">
@@ -181,16 +202,16 @@ export async function renderInfo() {
     <div class="sec">任务简介
       <span style="text-transform:none;letter-spacing:0;color:var(--faint)">所有会话汇总，供多代理共享</span>
       <button class="btn sm" id="refreshBriefBtn" style="margin-left:auto">${ic('refresh-cw', 11)} 刷新</button></div>
-    <div class="briefcell"><div class="v">${task.brief ? esc(task.brief) : '（暂无简介，点击刷新生成）'}</div></div>
+    <div class="briefcell"><div class="v">${task.brief ? esc(task.brief) : '（暂无简介，对话结束后会自动更新）'}</div></div>
+    <div class="sec">关键信息 <span style="text-transform:none;letter-spacing:0;color:var(--faint)">账号、密钥、Key、关键人名等，随请求注入</span></div>
+    <textarea class="membox" id="keyinfoBox" spellcheck="false" placeholder="每行一条，如：API Key：xxx / 测试账号：admin / 联系负责人：张三">${esc(keyinfo)}</textarea>
     <div class="sec">会话 <span style="text-transform:none;letter-spacing:0;color:var(--faint)">${topSessions.length}</span></div>
     <div id="sessionsList">${sessionRows}</div>
-    <div class="sec">任务记忆 <span style="text-transform:none;letter-spacing:0;color:var(--faint)">写入 .zzwork/memory.md，随请求注入</span></div>
-    <textarea class="membox" id="memoryBox" spellcheck="false" placeholder="记录稳定的任务事实、约定与决策…">${esc(memory)}</textarea>
     <div class="sec">TODO <span style="text-transform:none;letter-spacing:0;color:var(--faint)">${todoDone} / ${todos.length}</span></div>
     <div id="todoList">${todoHtml}</div>
     <div class="frow" style="margin:6px 0 0"><input class="ftxt" id="todoInput" placeholder="添加 TODO，回车确认"></div>
     <div class="sec">Skills</div>
-    <div class="chklist" id="skillToggles">${skillRows}</div>
+    <div class="chklist chips" id="skillToggles">${skillRows}</div>
     <div class="sec">MCP</div>
     <div class="chklist" id="mcpToggles">${mcpRows}</div>`
   body.dataset.renderId = String(seq)
@@ -200,10 +221,10 @@ export async function renderInfo() {
 
   $('#refreshBriefBtn').addEventListener('click', () => refreshBrief(task.id))
 
-  const saveMemory = debounce(async (value) => {
-    try { await fsapi('writeFile', { path: memoryPath, content: value }) } catch (e) { toast('记忆保存失败：' + e.message, 'err') }
+  const saveKeyinfo = debounce(async (value) => {
+    try { await fsapi('writeFile', { path: keyinfoPath, content: value }) } catch (e) { toast('关键信息保存失败：' + e.message, 'err') }
   }, 700)
-  $('#memoryBox').addEventListener('input', (e) => saveMemory(e.target.value))
+  $('#keyinfoBox').addEventListener('input', (e) => saveKeyinfo(e.target.value))
 
   $('#sessionsList').addEventListener('click', (e) => {
     const row = e.target.closest('[data-session]')
@@ -227,6 +248,12 @@ export async function renderInfo() {
     ])
   })
 
+  $('#statusSel').addEventListener('change', async (e) => {
+    await store('tasks.update', { id: task.id, patch: { status: e.target.value } })
+    await reloadTasks()
+    emit('tasks-changed')
+    await renderInfo()
+  })
   $('#groupSel').addEventListener('change', async (e) => {
     await store('tasks.update', { id: task.id, patch: { group_id: e.target.value || null } })
     await reloadTasks()

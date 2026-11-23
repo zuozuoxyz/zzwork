@@ -10,13 +10,15 @@ import { initSkillsView, renderSkills, renderSkillDetail } from './views/skills.
 import { initMcpView, renderMcp, renderMcpDetail } from './views/mcp.js'
 import { initModelsView, renderModels, renderModelDetail, renderProviderDetail } from './views/models.js'
 import { renderSettings } from './views/settings.js'
-import { initInboxView } from './views/inbox.js'
+import { initInboxView, renderInboxBoard, renderInboxCode } from './views/inbox.js'
+import { renderBoard, initBoardView } from './views/board.js'
 import { renderTabs, showPane } from './workbench/tabs.js'
 import { renderInfo } from './workbench/info.js'
 import { renderSession, initSessionView } from './workbench/session.js'
 import { renderChat, refreshChatHeader, initChatView } from './workbench/chat.js'
 import { openFile, activate, closeFile, closeAllFiles, restoreForTask } from './workbench/editor.js'
 import { initTerminalView, attachTaskTerminal } from './workbench/terminal.js'
+import { initUpdate } from './update.js'
 
 const ITEM_VIEW = { env: 'envs', skill: 'skills', mcp: 'mcp', model: 'models', provider: 'models' }
 const ITEM_ICON = { env: 'server', skill: 'file-text', mcp: 'plug', model: 'cpu', provider: 'server' }
@@ -129,18 +131,29 @@ function closeItem() {
   showPane('info')
 }
 
-function openInbox() {
+async function openInbox() {
   state.inboxOpen = true
   state.mode = 'task'
   state.item = null
   showPane('inbox')
   renderTabs()
+  await renderInboxBoard()
+  renderInboxCode()
 }
 
 function closeInbox() {
   state.inboxOpen = false
   showPane('info')
   renderTabs()
+}
+
+function openBoard() {
+  state.mode = 'board'
+  state.item = null
+  setView('board')
+  renderTabs()
+  showPane('board')
+  renderBoard().catch((e) => console.error('[board]', e))
 }
 
 function openSettings() {
@@ -155,6 +168,7 @@ function bindEvents() {
   $$('.abi[data-view]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const v = btn.getAttribute('data-view')
+      if (v === 'board') { openBoard(); return }
       setView(v)
       if (v === 'projects' && state.mode === 'item') closeItem()
     })
@@ -219,7 +233,9 @@ async function boot() {
   initSessionView()
   initChatView()
   initInboxView()
+  initBoardView()
   initTerminalView()
+  initUpdate()
   bindEvents()
 
   try {

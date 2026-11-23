@@ -20,7 +20,8 @@ function emitReply(input) {
   out({ type: 'stream_event', event: { type: 'content_block_delta', index: 3, delta: { type: 'text_delta', text: 'CLAUDE-FAKE 收到：' } } })
   out({ type: 'stream_event', event: { type: 'content_block_delta', index: 3, delta: { type: 'text_delta', text: input } } })
   out({ type: 'assistant', message: { content: [{ type: 'text', text }] } })
-  out({ type: 'result', result: text, session_id: 'fake-claude-session' })
+  out({ type: 'result', result: text, session_id: 'fake-claude-session',
+    usage: { input_tokens: 12, output_tokens: 34, cache_read_input_tokens: 500, cache_creation_input_tokens: 100 } })
 }
 
 function emitMain(raw, imgs) {

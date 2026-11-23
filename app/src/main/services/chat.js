@@ -9,6 +9,7 @@ const secrets = require('./secrets')
 const changes = require('./changes')
 const remotefs = require('./remotefs')
 const sessionFiles = require('./sessionFiles')
+const { taskJoin, readTextFile, writeTaskTextFile } = require('./taskfiles')
 
 const runs = new Map()
 // 后台 shell（Claude run_in_background 启动的常驻命令）：按会话归集，随会话 meta 持久化
@@ -25,16 +26,38 @@ function nextRunId() {
 
 const HISTORY_CHARS = 24000
 const MEMORY_LIMIT = 4000
+const KEYINFO_LIMIT = 4000
 const BRIEF_LIMIT = 4000
 
 // 图片附件：仅接受位图，缩略图存消息 meta，全分辨率 dataUrl 只在本轮内存流转
 const IMG_EXT = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp', 'image/gif': 'gif' }
 const IMG_MAX_BYTES = 8 * 1024 * 1024
-const ATT_MAX = 6
+const ATT_MAX = 30
 
 function post(payload) {
   const win = getWin && getWin()
   if (win && !win.isDestroyed()) win.webContents.send('zz:chat:event', payload)
+}
+
+// 辅助 LLM 调用（功能网络/实现逻辑/摘要/简介）可见化：在对话里以可折叠卡片展示 start → done/error
+function auxStart(taskId, sessionId, title) {
+  const S = getStore()
+  let sid = sessionId
+  if (!sid) {
+    try { const ss = S.listSessions(taskId).filter((s) => s.kind !== 'ask'); sid = ss.length ? ss[0].id : '' } catch {}
+  }
+  let messageId = ''
+  try { messageId = S.addMessage(taskId, 'assistant', '', { sessionId: sid, kind: 'aux', meta: { title, status: 'running' } }) } catch {}
+  post({ taskId, sessionId: sid, type: 'aux', messageId, title, status: 'running' })
+  const finalize = (m) => {
+    try { if (messageId) S.updateMessage(messageId, { meta: JSON.stringify(m) }) } catch {}
+    post({ taskId, sessionId: sid, type: 'aux', messageId, title, status: m.status, summary: m.summary || '', details: m.details || '' })
+  }
+  return {
+    messageId,
+    done(summary, details) { finalize({ title, status: 'done', summary: summary || '', details: details || '' }) },
+    error(msg) { finalize({ title, status: 'error', summary: msg || '失败' }) }
+  }
 }
 
 function envLabelOf(env) {
@@ -56,11 +79,6 @@ function taskEnv(S, task) {
 }
 
 // 任务内路径拼接：ssh:// 用 POSIX 分隔符，其余用本地 path
-function taskJoin(base, ...segs) {
-  const r = parseRemotePath(base)
-  if (r) return 'ssh://' + r.envId + '/' + [r.remotePath.replace(/^\/+|\/+$/g, ''), ...segs].filter(Boolean).join('/')
-  return path.join(base, ...segs)
-}
 
 function parseDataUrl(dataUrl) {
   const m = /^data:([^;]+);base64,([\s\S]+)$/.exec(String(dataUrl || ''))
@@ -352,23 +370,15 @@ function resolveSession(S, taskId, sessionId) {
   return S.ensureSession(taskId)
 }
 
-async function readTextFile(file, limit) {
-  const r = parseRemotePath(file)
-  if (r) {
-    const raw = await remotefs.readFile(r.envId, r.remotePath).catch(() => '')
-    return raw.length > limit ? raw.slice(0, limit) : raw
-  }
-  try {
-    const st = fs.statSync(file)
-    if (!st.isFile()) return ''
-    const raw = fs.readFileSync(file, 'utf8')
-    return raw.length > limit ? raw.slice(0, limit) : raw
-  } catch { return '' }
-}
-
 async function readMemory(task) {
   if (!task || !task.path) return ''
   return readTextFile(taskJoin(task.path, '.zzwork', 'memory.md'), MEMORY_LIMIT)
+}
+
+// 任务关键信息（账号、密钥、人名等）：用户手写或执行体写入 .zzwork/keyinfo.md
+async function readKeyInfo(task) {
+  if (!task || !task.path) return ''
+  return readTextFile(taskJoin(task.path, '.zzwork', 'keyinfo.md'), KEYINFO_LIMIT)
 }
 
 async function readInfo(task) {
@@ -386,6 +396,56 @@ async function readInfo(task) {
     } catch {}
   }
   return old
+}
+
+// 画板摘要：用户可能在画板上用图形/文字表达诉求；随下一次请求携带，注入后标记已发送
+function boardDigest(S, task) {
+  if (!task) return { text: '', hash: '' }
+  const raw = S.getSetting('session:canvas:' + task.id, '')
+  if (!raw) return { text: '', hash: '' }
+  let data = null
+  try { data = JSON.parse(raw) } catch { return { text: '', hash: '' } }
+  if (!data || typeof data !== 'object') return { text: '', hash: '' }
+  const shapes = Array.isArray(data.shapes) ? data.shapes
+    : (Array.isArray(data.strokes) ? data.strokes.map((s) => ({ type: 'pen', points: s && s.pts })) : [])
+  const edges = Array.isArray(data.edges) ? data.edges : []
+  const NAME = { rect: '矩形', roundRect: '圆角矩形', ellipse: '椭圆', diamond: '菱形', text: '文字', note: '便签', pen: '笔迹' }
+  const label = (s) => {
+    if (!s) return '图形'
+    const t = s.text ? String(s.text).replace(/\s+/g, ' ').trim() : ''
+    return (NAME[s.type] || '图形') + (t ? '「' + t.slice(0, 120) + '」' : '')
+  }
+  const byId = new Map(shapes.filter((s) => s && s.id).map((s) => [s.id, s]))
+  const lines = []
+  let penCount = 0
+  for (const s of shapes) {
+    if (!s) continue
+    if (s.type === 'pen') { penCount++; continue }
+    lines.push('- ' + label(s))
+  }
+  if (penCount) lines.push(`- 自由笔迹 ${penCount} 条（略）`)
+  for (const e of edges) {
+    const a = byId.get(e && e.from), b = byId.get(e && e.to)
+    if (!a || !b) continue
+    const lb = e.label ? '（' + String(e.label).slice(0, 60) + '）' : ''
+    lines.push(`- ${label(a)} → ${label(b)}${lb}`)
+  }
+  if (!lines.length) return { text: '', hash: '' }
+  return { text: '【画板（用户与你的图形交互）】\n' + lines.join('\n'), hash: raw }
+}
+
+// 生成画板摘要并在注入后标记已发送版本（未发送改动由前端角标提示）
+function boardPart(S, task) {
+  let r = { text: '', hash: '' }
+  try { r = boardDigest(S, task) } catch { return '' }
+  if (!r.text) return ''
+  try {
+    if (S.getSetting('session:canvasSent:' + task.id, '') !== r.hash) {
+      S.setSetting('session:canvasSent:' + task.id, r.hash)
+    }
+    post({ taskId: task.id, type: 'board-sent' })
+  } catch {}
+  return r.text
 }
 
 async function appendChatFile(task, role, content, meta) {
@@ -413,6 +473,18 @@ async function appendChatFile(task, role, content, meta) {
 }
 
 function approxTokens(text) { return Math.max(1, Math.ceil(String(text || '').length / 4)) }
+
+// 无 usage（CLI 执行体或兼容网关不回传）时按文本量估算输入/输出，保证前端始终能显示「输入/输出」拆分
+function contentText(c) {
+  if (typeof c === 'string') return c
+  if (Array.isArray(c)) return c.map((b) => (b && b.type === 'text' ? b.text : '')).join('')
+  return ''
+}
+function estimateInputTokens(sys, history) {
+  const sysText = typeof sys === 'string' ? sys : contentText(sys)
+  const histText = (history || []).map((m) => contentText(m.content)).join('\n')
+  return approxTokens(sysText + '\n' + histText)
+}
 
 // 按事件到达顺序把一轮输出记成 parts（思考/工具/正文交错），并带上各段耗时
 function createTurnLog() {
@@ -494,7 +566,7 @@ async function init(taskId, sessionId) {
   const { agent, model, env, fallbackFrom } = await pickAgentModel(S, task, session, { blocking: false })
   const messages = S.listMessages(taskId, session.id)
   const chars = messages.reduce((n, m) => n + String(m.content || '').length, 0)
-  const sessions = S.listSessions(taskId).map(publicSession)
+  const sessions = S.listSessions(taskId).filter((s) => s.kind !== 'ask').map(publicSession)
   const agentNotice = fallbackFrom
     ? `执行体「${fallbackFrom.name}」在${envLabelOf(env)}不可用，已切换为「${agent.name}」`
     : ''
@@ -537,16 +609,21 @@ function liveSnapshot(taskId, sessionId) {
   return null
 }
 
-function finishRun(runId, status, result) {
+function finishRun(runId, status, result, usage) {
   const S = getStore()
   const entry = runs.get(runId)
+  const u = usage || {}
+  const input = Number(u.input) || 0
+  const output = Number(u.output) || 0
+  const cached = Number(u.cached) || 0
   try {
     S.updateRun(runId, {
-      status, result: String(result || ''), tokens: approxTokens(result),
+      status, result: String(result || ''), tokens: (input + output) || approxTokens(result),
+      input_tokens: input, output_tokens: output, cached_tokens: cached,
       finished_at: new Date().toISOString()
     })
   } catch {}
-  if (entry && entry.onFinish) { try { entry.onFinish({ status, result: String(result || '') }) } catch {} }
+  if (entry && entry.onFinish) { try { entry.onFinish({ status, result: String(result || ''), usage: usage || null }) } catch {} }
   runs.delete(runId)
 }
 
@@ -635,14 +712,15 @@ async function send(p) {
   runs.set(runId, entry)
   if (p.parentRunId && runs.has(p.parentRunId)) runs.get(p.parentRunId).childRunIds.add(runId)
 
-  processRun({ runId, entry, task, session, agent, model, env, prompt: p.text || '', attachments: Array.isArray(p.attachments) ? p.attachments : [] }).catch((e) => {
+  const depth = Number(p.depth) || 0
+  processRun({ runId, entry, task, session, agent, model, env, prompt: p.text || '', attachments: Array.isArray(p.attachments) ? p.attachments : [], depth }).catch((e) => {
     post({ taskId: task.id, sessionId: session.id, runId, type: 'done', error: e.message })
     finishRun(runId, 'error', '')
   })
   return { runId, sessionId: session.id }
 }
 
-async function processRun({ runId, entry, task, session, agent, model, env: envIn, prompt, attachments }) {
+async function processRun({ runId, entry, task, session, agent, model, env: envIn, prompt, attachments, depth = 0 }) {
   const S = getStore()
   const post2 = (o) => post({ taskId: task.id, sessionId: session.id, runId, ...o })
   const env = envIn || taskEnv(S, task)
@@ -699,8 +777,8 @@ async function processRun({ runId, entry, task, session, agent, model, env: envI
   appendChatFile(task, 'user', chatLog || '(图片)', { sessionTitle: session.title })
   post2({ type: 'user', text: userText, messageId: mid, attachments: saved })
 
-  if (agent.kind === 'builtin') runBuiltin({ runId, task, session, agent, model, changes: ch, env, turnStart, prompt: userText, attachments: savedFull })
-  else runCli({ runId, task, session, agent, changes: ch, prompt: userText, env, turnStart, attachments: savedFull })
+  if (agent.kind === 'builtin') runBuiltin({ runId, task, session, agent, model, changes: ch, env, turnStart, prompt: userText, attachments: savedFull, depth })
+  else runCli({ runId, task, session, agent, changes: ch, prompt: userText, env, turnStart, attachments: savedFull, depth })
 }
 
 // 回合结束后的文件差异卡片：对话后展示本次改动的文件与 diff
@@ -745,16 +823,74 @@ function buildHistory(S, taskId, sessionId) {
   return out
 }
 
-async function buildSystem(S, task, session, extra) {
+// 功能网络 → 紧凑文本摘要（供 system prompt 注入，实现「基于功能编程」）
+function featureNetSummary(map) {
+  if (!map || !Array.isArray(map.nodes) || !map.nodes.length) return ''
+  const kids = new Map()
+  for (const n of map.nodes) {
+    const p = n.parent || ''
+    if (!kids.has(p)) kids.set(p, [])
+    kids.get(p).push(n)
+  }
+  const lines = []
+  const seen = new Set()
+  const walk = (pid, depth) => {
+    if (depth > 6) return
+    for (const n of (kids.get(pid) || [])) {
+      if (seen.has(n.id)) continue
+      seen.add(n.id)
+      const rw = []
+      if (n.reads && n.reads.length) rw.push('读 ' + n.reads.join('、'))
+      if (n.writes && n.writes.length) rw.push('写 ' + n.writes.join('、'))
+      const pad = depth === 0 ? '- ' : depth === 1 ? '  · ' : '      ‣ '
+      lines.push(`${pad}${n.title}${n.desc ? '：' + n.desc : ''}${rw.length ? ' [' + rw.join('；') + ']' : ''}`)
+      walk(n.id, depth + 1)
+    }
+  }
+  walk('', 0)
+  let text = lines.join('\n')
+  if (text.length > 2500) text = text.slice(0, 2500) + '\n…（功能网络过长，已截断）'
+  return text
+}
+
+// 稳定 system：只放跨轮基本不变的内容（基座/简介/功能网络/记忆/关键信息/摘要/会话提示词）。
+// 易变内容（看板、工作区变更、跨任务清单）不进来，避免把 system 尾部的缓存打穿。
+async function buildSystem(S, task, session) {
   const parts = [`你是 zzwork 工作助手，当前任务「${task.name}」（类型 ${task.type}）。回答简洁实用。`]
   if (task.brief) parts.push('【任务简介】\n' + task.brief)
+  if (task.type === 'code') {
+    try {
+      const map = await require('./featuremap').readMap(task)
+      const net = featureNetSummary(map)
+      if (net) parts.push('【功能网络】\n' + net + '\n（改动代码时请对齐这些功能及其数据来源/存储；如需调整功能网络，直接说明即可）')
+    } catch {}
+  }
   const mem = await readMemory(task)
   if (mem) parts.push('【任务记忆】\n' + mem)
+  const keyinfo = await readKeyInfo(task)
+  if (keyinfo) parts.push('【关键信息】\n' + keyinfo)
   if (session.summary) parts.push('【会话摘要】\n' + session.summary)
   const prompt = S.getSetting('session:prompt:' + task.id, '')
   if (prompt) parts.push('【本次会话提示词】\n' + prompt)
-  if (extra) parts.push(extra)
   return parts.join('\n\n')
+}
+
+// 易变尾部：拼到最后一条用户消息末尾（而非 system），使 system+历史 作为稳定前缀命中缓存
+function buildTurnTail(S, task, changesText, canAsk) {
+  const parts = []
+  const board = boardPart(S, task)
+  if (board) parts.push(board)
+  if (changesText) parts.push(changesText)
+  if (canAsk) parts.push(askGuidance(S, task.id))
+  return parts.join('\n\n')
+}
+
+function appendTailToLast(history, tail) {
+  if (!tail) return
+  const last = [...history].reverse().find((m) => m.role === 'user')
+  if (!last) { history.push({ role: 'user', content: tail }); return }
+  if (Array.isArray(last.content)) last.content = [...last.content, { type: 'text', text: '\n\n---\n' + tail }]
+  else last.content = String(last.content || '') + '\n\n---\n' + tail
 }
 
 // 本轮用户消息 → 多模态内容块（anthropic 用 image 块，其余用 image_url）
@@ -771,7 +907,164 @@ function buildUserContent(text, attachments, type) {
   return parts.length ? parts : String(text || '')
 }
 
-async function runBuiltin({ runId, task, session, agent, model, changes: ch, env, turnStart, attachments }) {
+// ── 跨任务只读询问（@@ASK 协议）──
+// 执行体在确实缺少信息时输出 @@ASK{"task":"<名或ID>","q":"问题"}@@，主进程在对方任务的
+// 隐藏常驻会话（kind='ask'）里只读问答，再把答案接续回当前 run，继续作答。
+const ASK_MAX_ROUNDS = 4
+const ASK_MAX_DEPTH = 1
+const ASK_MARKER_RE = /@@ASK\s*(\{[\s\S]*?\})@@/g
+
+function parseAskMarkers(text) {
+  const out = []
+  const s = String(text || '')
+  ASK_MARKER_RE.lastIndex = 0
+  let m
+  while ((m = ASK_MARKER_RE.exec(s)) !== null) {
+    try {
+      const o = JSON.parse(m[1])
+      if (o && (o.task != null || o.q != null)) out.push({ task: String(o.task || '').trim(), q: String(o.q || '').trim() })
+    } catch {}
+  }
+  return out
+}
+
+function stripAskMarkers(text) {
+  return String(text || '').replace(/@@ASK[\s\S]*?@@/g, '')
+}
+
+// 流式安全过滤器：完整 @@ASK{...}@@ 直接移除；未完成的标记先暂存，避免半截协议泄漏到界面
+function makeAskFilter() {
+  let hold = ''
+  const process = (buf) => {
+    let out = ''
+    let i = 0
+    while (i < buf.length) {
+      const s = buf.indexOf('@@ASK', i)
+      if (s < 0) { out += buf.slice(i); i = buf.length; break }
+      out += buf.slice(i, s)
+      const close = buf.indexOf('}@@', s)
+      if (close < 0) return { out, hold: buf.slice(s) }
+      i = close + 3
+    }
+    return { out, hold: '' }
+  }
+  return {
+    push(text) { const r = process(hold + text); hold = r.hold; return r.out },
+    flush() { const h = hold; hold = ''; return h }
+  }
+}
+
+function askTargetsLine(S, fromTaskId) {
+  let tasks = [], groups = []
+  try { tasks = S.listTasks().filter((t) => (t.scope || 'long') !== 'board' && t.id !== fromTaskId) } catch {}
+  try { groups = S.listGroups() } catch {}
+  if (!tasks.length) return ''
+  let from = {}
+  try { from = S.getTask(fromTaskId) || {} } catch {}
+  const curGroup = from.group_id || ''
+  const gMap = new Map(groups.map((g) => [g.id, g]))
+  const short = (s, n) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, n)
+  const kiNames = (t) => { try { const a = parseMeta(t.meta).keyinfoNames || []; return (Array.isArray(a) ? a : []).slice(0, 6) } catch { return [] } }
+  const one = (t) => {
+    const b = short(t.brief, 80)
+    const base = b ? `${t.name}：${b}` : t.name
+    const names = kiNames(t)
+    return names.length ? `${base}（掌握：${names.join('、')}）` : base
+  }
+  const gname = (gid) => (gMap.get(gid) || {}).name || '未分组'
+
+  const out = []
+  // 本组兄弟任务：带完整简介（最相关，优先让模型判断该问谁）
+  const siblings = tasks.filter((t) => (t.group_id || '') === curGroup)
+  if (siblings.length) {
+    out.push(`【本组 · ${gname(curGroup)}】`)
+    for (const t of siblings.slice(0, 20)) out.push('- ' + one(t))
+  }
+  // 其他组：只给组简介（组简介已含各任务一句话说明），避免把每组的完整简介都塞进来
+  const others = new Map()
+  for (const t of tasks) {
+    const gid = t.group_id || ''
+    if (gid === curGroup) continue
+    if (!others.has(gid)) others.set(gid, [])
+    others.get(gid).push(t)
+  }
+  if (others.size) {
+    out.push('【其他组】')
+    let n = 0
+    for (const [gid, list] of others) {
+      if (n >= 30) break
+      const gb = short((gMap.get(gid) || {}).brief, 400)
+      out.push(`- ${gname(gid)}：${gb || ('任务：' + list.map((t) => t.name).join('、'))}`)
+      n++
+    }
+  }
+  return out.join('\n') + (tasks.length > 40 ? `\n…（共 ${tasks.length} 个可询问任务）` : '')
+}
+
+function askGuidance(S, fromTaskId) {
+  const line = askTargetsLine(S, fromTaskId)
+  const parts = [
+    '【跨任务只读询问】若所需信息不在当前上下文/任务记忆/关键信息中，你可以询问其他任务（它们各自拥有独立上下文）。',
+    '确实需要时，单独输出一行协议（可一次多条）：',
+    '@@ASK{"task":"<任务名或ID>","q":"<具体问题>"}@@',
+    '系统会在对方任务的隐藏常驻会话里只读问答，并把答案补给你继续；不要编造对方的信息。'
+  ]
+  parts.push(line ? '可询问的任务（附简介）：\n' + line : '当前没有可询问的其他任务。')
+  return parts.join('\n')
+}
+
+function resolveAskTarget(S, spec) {
+  const q = String(spec || '').trim()
+  if (!q) return null
+  const list = S.listTasks().filter((t) => (t.scope || 'long') !== 'board')
+  return list.find((x) => x.id === q)
+    || list.find((x) => String(x.name) === q)
+    || list.find((x) => String(x.name || '').toLowerCase() === q.toLowerCase())
+    || list.find((x) => String(x.name || '').includes(q))
+    || null
+}
+
+// 每个被询问任务常驻一个隐藏会话，持续积累问答上下文
+function ensureAskSession(S, target) {
+  S.ensureSession(target.id) // 先确保主会话存在，避免隐藏会话被当成主会话
+  const list = S.listSessions(target.id).filter((s) => s.kind === 'ask')
+  if (list.length) return list[0]
+  return S.createSession({ taskId: target.id, kind: 'ask', title: '跨任务询问', agentId: target.agent_id || '', modelId: target.model_id || '' })
+}
+
+function askReadOnlyPrompt(fromName, question) {
+  return `【跨任务只读询问 · 来自任务「${fromName}」】\n请只依据你已掌握的信息简洁作答，不要修改任何文件、不要执行有副作用的操作，也不要再使用 @@ASK 协议。\n\n问题：\n${question}`
+}
+
+function formatAskAnswers(answers) {
+  const blocks = (answers || []).map((a) => {
+    const head = `问题：${a.q || ''}`
+    return a.ok === false ? `${head}\n（无法获取：${a.error || '无结果'}）` : `${head}\n回答：${a.answer || '（对方无内容）'}`
+  })
+  return `【跨任务询问结果】\n${blocks.join('\n\n')}\n\n请基于以上信息继续完成原任务；如仍缺少其他任务的信息，可继续输出 @@ASK 协议。`
+}
+
+async function askTask({ fromTaskId, targetTaskId, targetName, question, depth = 1 }) {
+  const S = getStore()
+  const from = fromTaskId ? S.getTask(fromTaskId) : null
+  const fromName = from ? from.name : '其他任务'
+  const target = targetTaskId ? S.getTask(targetTaskId) : resolveAskTarget(S, targetName)
+  if (!target) return { ok: false, unresolved: true, task: targetName || targetTaskId || '', q: question, error: '未找到该任务' }
+  if ((target.scope || 'long') === 'board') return { ok: false, unresolved: true, task: target.name, q: question, error: '看板任务不能被询问' }
+  const ask = ensureAskSession(S, target)
+  const answer = await new Promise((resolve) => {
+    let settled = false
+    const done = (v) => { if (!settled) { settled = true; resolve(String(v || '')) } }
+    try {
+      send({ taskId: target.id, sessionId: ask.id, text: askReadOnlyPrompt(fromName, question), depth, onFinish: (r) => done(r && r.result) })
+        .then((x) => { if (!x || !x.runId) done('') })
+        .catch(() => done(''))
+    } catch { done('') }
+  })
+  return { ok: true, task: target.name, q: question, answer }
+}
+
+async function runBuiltin({ runId, task, session, agent, model, changes: ch, env, turnStart, attachments, depth = 0 }) {
   const S = getStore()
   const post2 = (o) => post({ taskId: task.id, sessionId: session.id, runId, ...o })
   if (!model) {
@@ -799,9 +1092,13 @@ async function runBuiltin({ runId, task, session, agent, model, changes: ch, env
     const last = [...history].reverse().find((m) => m.role === 'user')
     if (last) last.content = buildUserContent(last.content, attachments, modelLike(S, model).type)
   }
-  const sys = await buildSystem(S, task, session, ch && ch.text ? ch.text : '')
+  const sys = await buildSystem(S, task, session)
+  const canAsk = depth < ASK_MAX_DEPTH
+  // 易变的看板/工作区变更/跨任务清单拼到最后一条用户消息，system 保持稳定以命中前缀缓存
+  appendTailToLast(history, buildTurnTail(S, task, ch && ch.text ? ch.text : '', canAsk))
   let acc = ''
   let think = ''
+  const usage = { input: 0, output: 0, cached: 0 }   // 本轮真实用量（跨 @@ASK 多轮累加）
   const turnLog = createTurnLog()
   {
     // 任务切换回来时 init 用这份快照重建进行中的气泡（步骤只在本轮内存里）
@@ -812,27 +1109,62 @@ async function runBuiltin({ runId, task, session, agent, model, changes: ch, env
     const meta = {
       agentId: agent.id, agentName: agent.name, modelId: model.id, modelName: model.name, runId
     }
-    await chatStream(modelLike(S, model), key, history, sys, (d) => {
-      if (state.aborted) return
-      acc += d
-      turnLog.text(d)
-      post2({ type: 'delta', text: d })
-    }, controller.signal, (t) => {
-      if (state.aborted) return
-      think += t
-      turnLog.think(t)
-      post2({ type: 'thinking', text: t })
-    })
+    for (let round = 0; ; round++) {
+      const filter = makeAskFilter()
+      let roundText = ''
+      const u = await chatStream(modelLike(S, model), key, history, sys, (d) => {
+        if (state.aborted) return
+        roundText += d
+        const safe = filter.push(d)
+        if (safe) { acc += safe; turnLog.text(safe); post2({ type: 'delta', text: safe }) }
+      }, controller.signal, (t) => {
+        if (state.aborted) return
+        think += t
+        turnLog.think(t)
+        post2({ type: 'thinking', text: t })
+      })
+      if (u) { usage.input += u.input || 0; usage.output += u.output || 0; usage.cached += u.cached || 0 }
+      const left = filter.flush()
+      if (left) { acc += left; turnLog.text(left); post2({ type: 'delta', text: left }) }
+      const asks = (canAsk && !state.aborted) ? parseAskMarkers(roundText) : []
+      if (!asks.length || round >= ASK_MAX_ROUNDS) break
+      const answers = []
+      for (const a of asks) {
+        if (state.aborted) break
+        const stepId = 'ask-' + round + '-' + Math.random().toString(36).slice(2, 6)
+        const stepName = '询问任务：' + (a.task || '?')
+        turnLog.step({ id: stepId, name: stepName, detail: a.q, status: 'running' })
+        post2({ type: 'step', step: { id: stepId, name: stepName, detail: a.q, status: 'running' } })
+        const r = await askTask({ fromTaskId: task.id, targetName: a.task, question: a.q, depth: depth + 1 })
+        const status = r.ok === false ? 'error' : 'done'
+        turnLog.step({ id: stepId, name: stepName, detail: a.q, status })
+        post2({ type: 'step', step: { id: stepId, name: stepName, detail: a.q, status } })
+        // 无法解析到真实任务（含协议示例占位符）时不追加、不续轮，避免误触发的空转
+        if (!r.unresolved) answers.push({ q: a.q, ok: r.ok, answer: r.answer, error: r.error })
+      }
+      if (state.aborted || !answers.length) break
+      history.push({ role: 'assistant', content: stripAskMarkers(roundText) })
+      history.push({ role: 'user', content: formatAskAnswers(answers) })
+    }
     const fin = turnLog.finish()
-    const fullMeta = { ...meta, thinking: think, parts: fin.parts, durationMs: fin.durationMs }
+    const inputTok = usage.input || estimateInputTokens(sys, history)
+    const outputTok = usage.output || approxTokens(acc)
+    const fullMeta = {
+      ...meta, thinking: think, parts: fin.parts, durationMs: fin.durationMs,
+      inputTokens: inputTok, outputTokens: outputTok, cachedTokens: usage.cached
+    }
     const cacheMeta = sessionFiles.slimMeta(fullMeta)
     const mid = S.addMessage(task.id, 'assistant', acc, {
       sessionId: session.id, kind: 'text', runId, meta: cacheMeta, fileMeta: fullMeta
     })
     appendChatFile(task, 'assistant', acc, { ...meta, sessionTitle: session.title })
     changes.saveBaseline(S, session.id, task, env, ch && ch.ck && ch.ck.kind)
-    post2({ type: 'done', content: acc, messageId: mid, tokens: approxTokens(acc), durationMs: fin.durationMs, parts: cacheMeta.parts })
-    finishRun(runId, 'done', acc)
+    post2({
+      type: 'done', content: acc, messageId: mid, tokens: inputTok + outputTok,
+      inputTokens: inputTok, outputTokens: outputTok, cachedTokens: usage.cached,
+      durationMs: fin.durationMs, parts: cacheMeta.parts
+    })
+    finishRun(runId, 'done', acc, { input: inputTok, output: outputTok, cached: usage.cached })
     scheduleAfterTurn(task.id, session.id)
     scheduleTurnDiff({ task, session, runId, env, turnStart })
   } catch (e) {
@@ -870,10 +1202,11 @@ function cliFailureHint(agent, content, model) {
   return `${agent.name} 的${m}在当前地区不可用：请在「环境」页为 ${agent.name} 选择其他模型。`
 }
 
-async function runCli({ runId, task, session, agent, changes: ch, prompt, env, turnStart, attachments }) {
+async function runCli({ runId, task, session, agent, changes: ch, prompt, env, turnStart, attachments, depth = 0 }) {
   const S = getStore()
   const post2 = (o) => post({ taskId: task.id, sessionId: session.id, runId, ...o })
   const meta = { ...parseMeta(task.meta), ...parseMeta(session.meta) }
+  const canAsk = depth < ASK_MAX_DEPTH
   let selection = { skills: [], mcps: [] }
   try {
     const tenv = env || resolveTaskEnv(S, task)
@@ -893,7 +1226,18 @@ async function runCli({ runId, task, session, agent, changes: ch, prompt, env, t
   if (session.summary) extraParts.push('【会话摘要】\n' + session.summary)
   const sessionPrompt = S.getSetting('session:prompt:' + task.id, '')
   if (sessionPrompt) extraParts.push('【本次会话提示词】\n' + sessionPrompt)
+  const keyinfo = await readKeyInfo(task)
+  if (keyinfo) extraParts.push('【关键信息】\n' + keyinfo.slice(0, 2000))
+  // 执行体有文件工具：让它把重要信息沉淀到 keyinfo.md，任务信息页可直接查看
+  const nativeBase = (env && env.unixPath) || resolveTaskEnv(S, task).unixPath || task.path
+  extraParts.push(`【关键信息记录】当用户提供或你确认了账号、密码、密钥、API Key、关键人名等重要信息时，用文件工具把要点追加到 ${taskJoin(String(nativeBase).replace(/[\\/]+$/, ''), '.zzwork', 'keyinfo.md')}，每行一条，不要编造。`)
   const systemExtra = extraParts.join('\n\n')
+  // 易变内容（看板/跨任务清单）走用户消息尾部，claude-code 的 --append-system-prompt 保持稳定以命中前缀缓存
+  const volatileParts = []
+  const board = boardPart(S, task)
+  if (board) volatileParts.push(board)
+  if (canAsk) volatileParts.push(askGuidance(S, task.id))
+  const volatileTail = volatileParts.join('\n\n')
 
   let finalPrompt = prompt
   if (ch && ch.count > 0) {
@@ -926,10 +1270,11 @@ async function runCli({ runId, task, session, agent, changes: ch, prompt, env, t
     }
   }
   // claude-code 有 --append-system-prompt 通道（prepareInjection 注入 systemExtra）；其他 CLI 附在消息末尾
+  const volatileSuffix = [volatileTail, histBlock].filter(Boolean).join('\n\n')
   if (agent.id === 'claude-code') {
-    if (histBlock) finalPrompt += '\n\n---\n' + histBlock
+    if (volatileSuffix) finalPrompt += '\n\n---\n' + volatileSuffix
   } else {
-    const tail = [systemExtra, histBlock].filter(Boolean)
+    const tail = [systemExtra, volatileSuffix].filter(Boolean)
     if (tail.length) finalPrompt += '\n\n---\n' + tail.join('\n\n')
   }
 
@@ -955,12 +1300,22 @@ async function runCli({ runId, task, session, agent, changes: ch, prompt, env, t
     post2({ type: 'step', step: sstep })
   }
   const agentMeta = { agentId: agent.id, agentName: agent.name, modelId: '', modelName: '', runId }
-  try {
-    let cli = null
-    try { cli = cliProviderArgs(agent, appModelTarget(S, task, session)) } catch {}
-    agentMeta.modelName = (cli && cli.model) || ''
-    const runner = await runAgent({
-      task, agent, env, prompt: finalPrompt, meta, selection, systemExtra, attachments,
+  let cli = null
+  try { cli = cliProviderArgs(agent, appModelTarget(S, task, session)) } catch {}
+  agentMeta.modelName = (cli && cli.model) || ''
+  // 执行体回传的真实 token 用量（如 Claude Code 的 result 帧），跨 @@ASK 多轮累加
+  let cliUsage = null
+
+  // 单轮 runAgent 用 Promise 包住 onDone/onError，便于 @@ASK 多轮接续（同一次 run）
+  const runRound = (promptText, useAtts) => new Promise((resolve, reject) => {
+    const filter = makeAskFilter()
+    let roundText = ''
+    let settled = false
+    const okv = (v) => { if (!settled) { settled = true; resolve(v) } }
+    const fail = (e) => { if (!settled) { settled = true; reject(e instanceof Error ? e : new Error(String(e))) } }
+    runAgent({
+      task, agent, env, prompt: promptText, meta, selection, systemExtra,
+      attachments: useAtts ? (attachments || []) : [],
       model: cli && cli.model, envVars: cli && cli.envVars, extraArgs: cli && cli.extraArgs,
       onMeta: (k, v) => {
         meta[k] = v
@@ -972,64 +1327,108 @@ async function runCli({ runId, task, session, agent, changes: ch, prompt, env, t
         })
         if (cur) post2({ type: 'shell', shell: cur })
       },
-      onDelta: (s) => { acc += s; turnLog.text(s); post2({ type: 'delta', text: s }) },
+      onDelta: (s) => {
+        roundText += s
+        const safe = filter.push(s)
+        if (safe) { acc += safe; turnLog.text(safe); post2({ type: 'delta', text: safe }) }
+      },
       onThinking: (t) => { think += t; turnLog.think(t); post2({ type: 'thinking', text: t }) },
       onStep: mergeStep,
       onPlan: (items) => {
         plan = items
         post2({ type: 'plan', plan: items })
       },
-      onDone: (result) => {
-        const content = (result && result.trim()) ? result : acc
-        const fin = turnLog.finish()
-        const failHint = cliFailureHint(agent, content, cli && cli.model)
-        if (failHint) {
-          const fullMeta = { ...agentMeta, thinking: think, status: 'error', parts: fin.parts, durationMs: fin.durationMs, plan: plan || undefined }
-          const cacheMeta = sessionFiles.slimMeta(fullMeta)
-          S.addMessage(task.id, 'assistant', content, {
-            sessionId: session.id, kind: 'text', runId, meta: cacheMeta, fileMeta: fullMeta
-          })
-          appendChatFile(task, 'assistant', content, { ...agentMeta, sessionTitle: session.title })
-          post2({ type: 'done', error: failHint })
-          finishRun(runId, 'error', content)
-          return
+      onDone: (result, usage) => {
+        if (usage) {
+          cliUsage = cliUsage || { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 }
+          cliUsage.input_tokens += Number(usage.input_tokens) || 0
+          cliUsage.output_tokens += Number(usage.output_tokens) || 0
+          cliUsage.cache_read_input_tokens += Number(usage.cache_read_input_tokens) || 0
+          cliUsage.cache_creation_input_tokens += Number(usage.cache_creation_input_tokens) || 0
         }
-        const fullMeta = {
-          ...agentMeta, thinking: think,
-          steps: steps.length ? steps : undefined,
-          parts: fin.parts, durationMs: fin.durationMs,
-          plan: plan || undefined
-        }
-        const cacheMeta = sessionFiles.slimMeta(fullMeta)
-        const mid = S.addMessage(task.id, 'assistant', content, {
-          sessionId: session.id, kind: 'text', runId, meta: cacheMeta, fileMeta: fullMeta
-        })
-        appendChatFile(task, 'assistant', content, { ...agentMeta, sessionTitle: session.title })
-        changes.saveBaseline(S, session.id, task, env, ch && ch.ck && ch.ck.kind)
-        post2({
-          type: 'done', content, messageId: mid, tokens: approxTokens(content),
-          durationMs: fin.durationMs, parts: cacheMeta.parts, plan: plan || undefined
-        })
-        finishRun(runId, 'done', content)
-        scheduleAfterTurn(task.id, session.id)
-        scheduleTurnDiff({ task, session, runId, env, turnStart })
+        const left = filter.flush()
+        if (left) { acc += left; turnLog.text(left); post2({ type: 'delta', text: left }) }
+        okv({ content: stripAskMarkers((result && result.trim()) ? result : roundText), roundText })
       },
-      onError: (err) => {
-        post2({ type: 'done', error: err })
-        try { S.updateRun(runId, { error: String(err), finished_at: new Date().toISOString() }) } catch {}
-        finishRun(runId, 'error', '')
-      },
+      onError: (err) => fail(err),
       onAsk: ({ requestId, input }) => {
         const e = runs.get(runId)
         if (e) { if (!e.asks) e.asks = new Map(); e.asks.set(requestId, input || {}) }
         post2({ type: 'ask', requestId, input })
       }
-    })
-    const entry = runs.get(runId)
-    if (entry) {
-      entry.kill = () => { try { runner.kill() } catch {} }
-      if (typeof runner.answer === 'function') entry.answer = (requestId, answers) => runner.answer(requestId, answers)
+    }).then((runner) => {
+      const entry = runs.get(runId)
+      if (entry) {
+        entry.kill = () => { try { runner.kill() } catch {} }
+        if (typeof runner.answer === 'function') entry.answer = (requestId, answers) => runner.answer(requestId, answers)
+      }
+    }).catch((e) => fail(e))
+  })
+
+  try {
+    let nextPrompt = finalPrompt
+    let content = ''
+    for (let round = 0; ; round++) {
+      const r = await runRound(nextPrompt, round === 0)
+      content = acc.trim() ? acc : r.content
+      const asks = canAsk ? parseAskMarkers(r.roundText) : []
+      if (!asks.length || round >= ASK_MAX_ROUNDS) break
+      const ans = []
+      for (const a of asks) {
+        const cur = runs.get(runId)
+        if (cur && cur.aborted) break
+        const stepId = 'ask-' + round + '-' + Math.random().toString(36).slice(2, 6)
+        const stepName = '询问任务：' + (a.task || '?')
+        mergeStep({ id: stepId, name: stepName, detail: a.q, status: 'running' })
+        const rr = await askTask({ fromTaskId: task.id, targetName: a.task, question: a.q, depth: depth + 1 })
+        mergeStep({ id: stepId, name: stepName, detail: a.q, status: rr.ok === false ? 'error' : 'done' })
+        // 无法解析到真实任务（含协议示例占位符）时不追加、不续轮
+        if (!rr.unresolved) ans.push({ q: a.q, ok: rr.ok, answer: rr.answer, error: rr.error })
+      }
+      if (!ans.length) break
+      nextPrompt = formatAskAnswers(ans)
     }
+    const fin = turnLog.finish()
+    const failHint = cliFailureHint(agent, content, cli && cli.model)
+    if (failHint) {
+      const fullMeta = { ...agentMeta, thinking: think, status: 'error', parts: fin.parts, durationMs: fin.durationMs, plan: plan || undefined }
+      const cacheMeta = sessionFiles.slimMeta(fullMeta)
+      S.addMessage(task.id, 'assistant', content, {
+        sessionId: session.id, kind: 'text', runId, meta: cacheMeta, fileMeta: fullMeta
+      })
+      appendChatFile(task, 'assistant', content, { ...agentMeta, sessionTitle: session.title })
+      post2({ type: 'done', error: failHint })
+      finishRun(runId, 'error', content)
+      return
+    }
+    // 优先用执行体回传的真实用量；拿不到时退回文本量估算
+    const realIn = cliUsage
+      ? (Number(cliUsage.input_tokens) || 0) + (Number(cliUsage.cache_read_input_tokens) || 0) + (Number(cliUsage.cache_creation_input_tokens) || 0)
+      : 0
+    const inputTok = realIn || estimateInputTokens(finalPrompt, [])
+    const outputTok = (cliUsage && Number(cliUsage.output_tokens)) || approxTokens(content)
+    const cachedTok = cliUsage ? (Number(cliUsage.cache_read_input_tokens) || 0) : 0
+    const fullMeta = {
+      ...agentMeta, thinking: think,
+      steps: steps.length ? steps : undefined,
+      parts: fin.parts, durationMs: fin.durationMs,
+      plan: plan || undefined,
+      inputTokens: inputTok, outputTokens: outputTok, cachedTokens: cachedTok
+    }
+    const cacheMeta = sessionFiles.slimMeta(fullMeta)
+    const mid = S.addMessage(task.id, 'assistant', content, {
+      sessionId: session.id, kind: 'text', runId, meta: cacheMeta, fileMeta: fullMeta
+    })
+    appendChatFile(task, 'assistant', content, { ...agentMeta, sessionTitle: session.title })
+    changes.saveBaseline(S, session.id, task, env, ch && ch.ck && ch.ck.kind)
+    post2({
+      type: 'done', content, messageId: mid, tokens: inputTok + outputTok,
+      inputTokens: inputTok, outputTokens: outputTok, cachedTokens: cachedTok,
+      durationMs: fin.durationMs, parts: cacheMeta.parts, plan: plan || undefined
+    })
+    finishRun(runId, 'done', content, { input: inputTok, output: outputTok, cached: cachedTok })
+    scheduleAfterTurn(task.id, session.id)
+    scheduleTurnDiff({ task, session, runId, env, turnStart })
   } catch (e) {
     post2({ type: 'done', error: e.message })
     try { S.updateRun(runId, { error: e.message, finished_at: new Date().toISOString() }) } catch {}
@@ -1081,6 +1480,7 @@ async function summarizeSession(taskId, sessionId) {
   const key = keyOf(S, model)
   let summary = ''
   if (model && key) {
+    const aux = auxStart(taskId, sessionId, '会话摘要')
     try {
       let acc = ''
       await chatStream(modelLike(S, model), key, [{
@@ -1088,7 +1488,8 @@ async function summarizeSession(taskId, sessionId) {
         content: `已有摘要：\n${session.summary || '（无）'}\n\n新增对话：\n${transcript}`
       }], '你是会话摘要器。用不超过 300 字的中文更新会话摘要，保留目标、关键决定、结论和未完成事项；不要寒暄，不要编造。', (d) => { acc += d })
       summary = acc.trim()
-    } catch {}
+      aux.done(summary ? '已更新会话摘要' : '摘要为空，已回退', summary)
+    } catch (e) { aux.error(e && e.message) }
   }
   if (!summary) summary = heuristicSummary(session.summary, slice)
   if (!summary) return { ok: true, summary: session.summary || '' }
@@ -1103,7 +1504,42 @@ async function summarizeSession(taskId, sessionId) {
 }
 
 function scheduleAfterTurn(taskId, sessionId) {
-  setTimeout(() => { maybeSummarize(taskId, sessionId).catch(() => {}) }, 800)
+  setTimeout(() => {
+    ;(async () => {
+      try { await maybeSummarize(taskId, sessionId) } catch {}
+      try { await autoSyncTaskInfo(taskId) } catch {}
+      try { await require('./featuremap').maintainVisible(taskId, sessionId) } catch {}
+    })()
+  }, 800)
+}
+
+// 回合结束后自动同步任务简介与关键信息（无需手动刷新）
+const keyinfoCache = new Map()   // taskId -> 上次推送给前端的 keyinfo
+const autoBriefAt = new Map()    // taskId -> 上次自动刷新简介的时间戳
+const AUTO_BRIEF_GAP = 15000
+
+async function autoSyncTaskInfo(taskId) {
+  const S = getStore()
+  const task = S.getTask(taskId)
+  if (!task) return
+  // 关键信息：执行体可能在回合中改写了 .zzwork/keyinfo.md
+  try {
+    const content = await readKeyInfo(task)
+    if (keyinfoCache.get(taskId) !== content) {
+      keyinfoCache.set(taskId, content)
+      post({ taskId, type: 'keyinfo', content })
+    }
+  } catch {}
+  // 简介：有新消息、且距上次自动刷新足够久才重建（避免与摘要刷新重复）
+  const msgs = S.listMessages(taskId).filter((m) => (m.kind || 'text') === 'text')
+  const last = msgs[msgs.length - 1]
+  if (!last) return
+  const briefAt = task.brief_at ? Date.parse(task.brief_at) : 0
+  if (briefAt && Date.parse(last.created_at || '') <= briefAt) return
+  const now = Date.now()
+  if (now - (autoBriefAt.get(taskId) || 0) < AUTO_BRIEF_GAP) return
+  autoBriefAt.set(taskId, now)
+  await refreshBrief(taskId).catch(() => {})
 }
 
 async function maybeSummarize(taskId, sessionId) {
@@ -1122,43 +1558,161 @@ async function maybeSummarize(taskId, sessionId) {
   await summarizeSession(taskId, sessionId)
 }
 
-async function refreshBrief(taskId, opts) {
+const briefJobs = new Map()   // taskId -> 进行中的刷新，避免并发重复调用
+
+function refreshBrief(taskId, opts) {
+  const running = briefJobs.get(taskId)
+  if (running) return running
+  const p = doRefreshBrief(taskId, opts).finally(() => briefJobs.delete(taskId))
+  briefJobs.set(taskId, p)
+  return p
+}
+
+async function doRefreshBrief(taskId) {
   const S = getStore()
   const task = S.getTask(taskId)
   if (!task) return { ok: false, error: '任务不存在' }
-  const sessions = S.listSessions(taskId)
+  const isCode = task.type === 'code'
+  const sessions = S.listSessions(taskId).filter((s) => s.kind !== 'ask')
   const summaries = sessions.filter((s) => s.summary).map((s) => `- ${s.title}${s.kind === 'subagent' ? '（子代理）' : ''}: ${s.summary}`)
   const info = await readInfo(task)
   const mem = await readMemory(task)
+  const keyinfo = await readKeyInfo(task)
+  // code 任务：附带项目文件树 / 关键文件 / 源码抽样，用于梳理全部功能与技术栈
+  let digest = ''
+  if (isCode) { try { digest = await require('./featuremap').projectDigest(task) } catch {} }
+  // 最近几轮对话：摘要尚未生成时，简介也要跟上最新进展
+  const recent = S.listMessages(taskId).filter((m) => (m.kind || 'text') === 'text').slice(-8)
+    .map((m) => `${m.role === 'user' ? '用户' : 'AI'}：${String(m.content).slice(0, 600)}`).join('\n')
   const source = [
     `任务：${task.name}（${task.type}）`,
     `路径：${task.path}`,
+    digest ? `项目摘要：\n${digest}` : '',
     info ? `.zzwork/info.md 节选：\n${info}` : '',
     summaries.length ? `会话摘要：\n${summaries.join('\n')}` : '',
-    mem ? `任务记忆：\n${mem}` : ''
+    recent ? `最近对话：\n${recent}` : '',
+    mem ? `任务记忆：\n${mem}` : '',
+    keyinfo ? `已有【关键信息】：\n${keyinfo}` : ''
   ].filter(Boolean).join('\n\n')
 
   const model = pickDefaultModel(S)
   const key = keyOf(S, model)
-  let brief = ''
+  let acc = ''
   if (model && key) {
+    const aux = auxStart(taskId, '', '任务简介')
+    const rule1 = isCode
+      ? '1）用不超过 240 字的中文概括该代码项目的**全部功能模块**与**技术栈**（语言、框架、关键依赖、架构分层、数据存储、运行/构建方式）；'
+      : '1）用不超过 200 字的中文概括该任务**当前涉及的信息**：做了什么、目标、当前进展、关键决定、涉及的系统/数据与下一步；'
     try {
-      let acc = ''
-      await chatStream(modelLike(S, model), key, [{ role: 'user', content: source.slice(0, 12000) }],
-        '你是任务简介生成器。用不超过 200 字的中文概括该任务的目标、当前进展、关键决定与下一步；只陈述材料中的事实，不要编造。',
+      await chatStream(modelLike(S, model), key, [{ role: 'user', content: source.slice(0, 14000) }],
+        '你是任务简介生成器兼信息提取器。根据材料完成两件事：\n' + rule1 + '\n' +
+        '2）仅当材料中出现账号、密码、密钥、API Key、关键人名、联系方式等重要信息时，逐行原样列出（已有的不要重复，不要编造）。\n' +
+        '严格按以下格式输出：\n【简介】\n（简介内容）\n【关键信息】\n（每行一条，没有则留空）',
         (d) => { acc += d })
-      brief = acc.trim()
-    } catch {}
+      aux.done('已刷新任务简介', acc.trim())
+    } catch (e) { aux.error(e && e.message) }
   }
+  let brief = acc.trim()
+  let keyLines = []
+  const mark = brief.indexOf('【关键信息】')
+  if (mark >= 0) {
+    keyLines = brief.slice(mark + '【关键信息】'.length).split('\n').map((l) => l.trim()).filter(Boolean)
+    brief = brief.slice(0, mark)
+  }
+  brief = brief.replace(/^【简介】\s*/, '').trim()
   if (!brief) {
     const parts = []
     if (info) parts.push(info.replace(/\s+/g, ' ').slice(0, 600))
     if (summaries.length) parts.push(summaries.join(' '))
     brief = parts.join(' ').slice(0, 800) || '（暂无足够信息生成简介）'
   }
+  // 新提取到的关键信息并入 keyinfo.md，并推送给信息页
+  if (keyLines.length) {
+    try {
+      const cur = await readKeyInfo(task)
+      const lines = cur.split('\n').map((l) => l.trim()).filter(Boolean)
+      const seen = new Set(lines)
+      let added = false
+      for (const line of keyLines) { if (!seen.has(line)) { seen.add(line); lines.push(line); added = true } }
+      if (added) {
+        const merged = lines.join('\n')
+        await writeTaskTextFile(taskJoin(task.path, '.zzwork', 'keyinfo.md'), merged + '\n')
+        keyinfoCache.set(taskId, merged)
+        post({ taskId, type: 'keyinfo', content: merged })
+      }
+    } catch {}
+  }
   const at = new Date().toISOString()
   S.updateTask(taskId, { brief, brief_at: at })
   post({ taskId, type: 'brief', brief, briefAt: at })
+  // 提取关键信息“名称”（分隔符前的标签，仅名称不含数据），供跨任务询问清单判断该问谁
+  try {
+    const finalKi = await readKeyInfo(task)
+    const names = [...new Set(finalKi.split('\n').map((l) => l.trim())
+      .map((l) => { const parts = l.split(/[:：=]/); return parts.length > 1 ? parts[0].trim() : '' })
+      .filter((s) => s && s.length <= 24))].slice(0, 10)
+    const meta = parseMeta(S.getTask(taskId).meta)
+    if (JSON.stringify(meta.keyinfoNames || []) !== JSON.stringify(names)) {
+      S.updateTask(taskId, { meta: JSON.stringify({ ...meta, keyinfoNames: names }) })
+    }
+  } catch {}
+  // 组简介：组内任务有更新时按间隔自动重建（组简介含各任务一句话说明）
+  if (task.group_id) {
+    const now = Date.now()
+    if (now - (autoGroupBriefAt.get(task.group_id) || 0) >= AUTO_GROUP_BRIEF_GAP) {
+      autoGroupBriefAt.set(task.group_id, now)
+      refreshGroupBrief(task.group_id).catch(() => {})
+    }
+  }
+  return { ok: true, brief, brief_at: at }
+}
+
+// 组简介：一句话概括组职责 + 组内各任务一句话说明，供跨任务询问时快速定位
+const AUTO_GROUP_BRIEF_GAP = 15000
+const autoGroupBriefAt = new Map()
+const groupBriefJobs = new Map()
+
+function refreshGroupBrief(groupId) {
+  if (!groupId) return Promise.resolve({ ok: false })
+  const running = groupBriefJobs.get(groupId)
+  if (running) return running
+  const p = doRefreshGroupBrief(groupId).finally(() => groupBriefJobs.delete(groupId))
+  groupBriefJobs.set(groupId, p)
+  return p
+}
+
+async function doRefreshGroupBrief(groupId) {
+  const S = getStore()
+  const group = (S.listGroups() || []).find((g) => g.id === groupId)
+  if (!group) return { ok: false, error: '分组不存在' }
+  const short = (s, n) => String(s || '').replace(/\s+/g, ' ').trim().slice(0, n)
+  const tasks = S.listTasks().filter((t) => (t.group_id || '') === groupId && (t.scope || 'long') !== 'board')
+  const at = new Date().toISOString()
+  if (!tasks.length) {
+    S.updateGroup(groupId, { brief: '', brief_at: at })
+    return { ok: true, brief: '' }
+  }
+  const source = [
+    `组名：${group.name}`,
+    ...tasks.map((t) => `- ${t.name}（${t.type}）：${short(t.brief, 120) || '（暂无简介）'}`)
+  ].join('\n')
+  const model = pickDefaultModel(S)
+  const key = keyOf(S, model)
+  let acc = ''
+  if (model && key) {
+    try {
+      await chatStream(modelLike(S, model), key, [{ role: 'user', content: source.slice(0, 12000) }],
+        '你是分组简介生成器。根据组内任务列表，先一句话概括该组的整体职责（不超过 60 字），' +
+        '再逐行列出每个任务的一句话说明（≤25 字，用于判断该问组里哪个任务）。严格按以下格式输出：\n' +
+        '【组简介】\n（一句整体职责）\n【任务】\n- 任务名：一句话说明',
+        (d) => { acc += d })
+    } catch {}
+  }
+  let brief = acc.trim()
+  brief = brief.replace(/^【组简介】\s*/, '').replace(/\n?【任务】\s*/, '\n').trim()
+  if (!brief) brief = `组整体：${group.name}\n` + tasks.map((t) => `- ${t.name}：${short(t.brief, 24) || '暂无简介'}`).join('\n')
+  S.updateGroup(groupId, { brief, brief_at: at })
+  post({ taskId: '', type: 'groupBrief', groupId, brief, briefAt: at })
   return { ok: true, brief, brief_at: at }
 }
 
@@ -1357,8 +1911,16 @@ module.exports = {
   stop,
   summarizeSession,
   refreshBrief,
+  refreshGroupBrief,
   spawnSubagent,
   orchestrate,
+  // 供 featuremap 等辅助服务复用（避免重复实现模型/事件逻辑）
+  post,
+  auxStart,
+  keyOf,
+  modelLike,
+  pickDefaultModel,
+  extractJson,
   register(ipcMain, winGetter) {
     getWin = winGetter
     ipcMain.handle('zz:chat:init', (_e, p) => init(p.taskId, p.sessionId))
@@ -1375,7 +1937,11 @@ module.exports = {
     })
     ipcMain.handle('zz:chat:summarize', (_e, p) => summarizeSession(p.taskId, p.sessionId))
     ipcMain.handle('zz:chat:brief', (_e, p) => refreshBrief(p.taskId, p))
+    ipcMain.handle('zz:chat:groupBrief', (_e, p) => refreshGroupBrief(p.groupId))
     ipcMain.handle('zz:chat:spawn', (_e, p) => spawnSubagent(p))
+    ipcMain.handle('zz:chat:askTask', (_e, p) => askTask({
+      fromTaskId: p.fromTaskId, targetTaskId: p.targetTaskId, targetName: p.targetName, question: p.question, depth: p.depth
+    }))
     ipcMain.handle('zz:chat:orchestrate', (_e, p) => orchestrate(p))
     ipcMain.handle('zz:chat:shells', (_e, p) => shellList(p.sessionId))
     ipcMain.handle('zz:chat:shellStop', (_e, p) => stopShell(p))

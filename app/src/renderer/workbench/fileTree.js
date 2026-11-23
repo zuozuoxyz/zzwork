@@ -12,6 +12,53 @@ const CHEV = `<span class="chev">${ic('chevron-right', 12)}</span>`
 // 元数据目录不展示（项目文件视图只关心任务内容）
 const HIDDEN = new Set(['.zzwork'])
 let lastTaskPath = ''
+// 拖拽移动文件/文件夹：{ path, name, dir }
+let dragFile = null
+
+const normSlash = (p) => String(p || '').replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+// child 是否等于 parent 或位于 parent 之下
+function isUnderPath(parent, child) {
+  const p = normSlash(parent)
+  const c = normSlash(child)
+  return !!p && (c === p || c.startsWith(p + '/'))
+}
+// destDir 能否接收当前拖拽项
+function validDrop(destDir) {
+  const src = dragFile
+  if (!src || !destDir) return false
+  if (normSlash(dirname(src.path)) === normSlash(destDir)) return false // 原地
+  if (src.dir && isUnderPath(src.path, destDir)) return false // 不能移入自身/后代
+  return true
+}
+
+// 移动后修正展开状态（原路径前缀整体替换为新路径）
+function remapExpanded(from, to) {
+  for (const p of [...expanded]) {
+    if (!isUnderPath(from, p)) continue
+    expanded.delete(p)
+    expanded.add(to + String(p).slice(String(from).length))
+  }
+}
+
+// 关闭受移动影响的已打开文件（其磁盘路径已失效）
+async function closeTabsUnder(from) {
+  for (const t of state.fileTabs.filter((tab) => isUnderPath(from, tab.path))) {
+    try { await closeFile(t.path) } catch {}
+  }
+}
+
+async function moveEntry(destDir, container) {
+  const src = dragFile
+  dragFile = null
+  if (!src || !destDir) return
+  if (normSlash(dirname(src.path)) === normSlash(destDir)) return
+  if (src.dir && isUnderPath(src.path, destDir)) return
+  const target = joinPath(destDir, src.name)
+  try { await fsapi('rename', { from: src.path, to: target }) } catch (e) { toast('移动失败：' + e.message, 'err', 4000); return }
+  remapExpanded(src.path, target)
+  await closeTabsUnder(src.path)
+  await renderFileTree(container)
+}
 
 export async function renderFileTree(container) {
   const task = activeTask()
@@ -51,6 +98,24 @@ export async function renderFileTree(container) {
       { label: '刷新', icon: 'rotate-cw', action: () => renderFileTree(container) },
       { label: '在资源管理器中显示', icon: 'external-link', action: () => fsapi('reveal', { path: task.path }).catch((err) => toast(err.message, 'err')) }
     ])
+  })
+
+  // 拖到树空白处 = 移到任务根目录
+  body.addEventListener('dragover', (e) => {
+    if (!dragFile || e.target.closest('.fr')) return
+    if (!validDrop(task.path)) return
+    e.preventDefault()
+    try { e.dataTransfer.dropEffect = 'move' } catch {}
+    body.classList.add('drop-root')
+  })
+  body.addEventListener('dragleave', (e) => {
+    if (e.target === body) body.classList.remove('drop-root')
+  })
+  body.addEventListener('drop', async (e) => {
+    if (e.target.closest('.fr')) return
+    e.preventDefault()
+    body.classList.remove('drop-root')
+    await moveEntry(task.path, container)
   })
 
   await rebuild(container, task)
@@ -104,6 +169,38 @@ async function buildTree(body, host, task, dirPath, depth, after) {
     else body.appendChild(row)
     last = row
 
+    // 拖拽源
+    row.draggable = true
+    row.addEventListener('dragstart', (e) => {
+      dragFile = { path: it.path, name: it.name, dir: !!it.dir }
+      try { e.dataTransfer.effectAllowed = 'move' } catch {}
+      try { e.dataTransfer.setData('text/plain', it.path) } catch {}
+      row.classList.add('dragging')
+    })
+    row.addEventListener('dragend', () => { row.classList.remove('dragging'); dragFile = null })
+    // 文件夹作为放置目标：移入该文件夹
+    if (it.dir) {
+      row.addEventListener('dragover', (e) => {
+        if (!validDrop(it.path)) return
+        if (e.relatedTarget && row.contains(e.relatedTarget)) return
+        e.preventDefault()
+        e.stopPropagation()
+        try { e.dataTransfer.dropEffect = 'move' } catch {}
+        row.classList.add('drop-into')
+      })
+      row.addEventListener('dragleave', (e) => {
+        if (e.relatedTarget && row.contains(e.relatedTarget)) return
+        row.classList.remove('drop-into')
+      })
+      row.addEventListener('drop', async (e) => {
+        if (!validDrop(it.path)) return
+        e.preventDefault()
+        e.stopPropagation()
+        row.classList.remove('drop-into')
+        await moveEntry(it.path, host)
+      })
+    }
+
     row.addEventListener('click', async () => {
       if (it.dir) {
         // 只增删该目录的子节点，避免整树重建导致的闪烁与滚动跳动
@@ -113,6 +210,7 @@ async function buildTree(body, host, task, dirPath, depth, after) {
         row.classList.toggle('open', open)
         const fi = row.querySelector('.fi')
         if (fi) fi.innerHTML = ic(open ? 'folder-open' : 'folder', 13)
+        refreshIcons()
         if (open) {
           await buildTree(body, host, task, it.path, depth + 1, row)
           refreshIcons()

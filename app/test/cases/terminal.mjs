@@ -168,7 +168,7 @@ export default [
       await ensureXterm(app)
       await app.waitFor(`window.zzwork.invoke('terminal','list',{}).then(l => l.length > 0)`, 25000, 'PTY 存在')
       const taskId = (await app.store('tasks.list')).find((t) => t.name === '终端甲').id
-      await app.contextMenuText('.row[data-task]', '终端甲', '删除任务')
+      await app.contextMenuText('.row[data-task]', '终端甲', '移到回收站')
       await app.waitFor(`![...document.querySelectorAll('.row[data-task]')].some(r=>r.textContent.includes('终端甲'))`, 10000, '任务行消失')
       await app.waitFor(
         `window.zzwork.invoke('terminal','list',{ taskId: ${JSON.stringify(taskId)} }).then(l => l.length === 0)`,

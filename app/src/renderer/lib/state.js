@@ -8,11 +8,14 @@ export const state = {
   fileTabs: [],        // [{ path, name, dirty }]
   activeFile: null,
   inboxOpen: false,    // 需求便签 tab 是否打开（唯一）
+  boardCards: [],      // 看板卡片（short 任务，scope==='board'）
   filter: '',
   collapsedGroups: new Set(),
 
   groups: [],
   tasks: [],
+  trash: [],           // 回收站中的任务
+  trashOpen: false,
   envs: [],
   skills: [],
   mcp: [],

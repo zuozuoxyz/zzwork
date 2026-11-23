@@ -24,7 +24,7 @@ export function renderMcp() {
     const sel = state.mode === 'item' && state.item && state.item.kind === 'mcp' && state.item.id === m.id
     const meta = t ? (t.ok ? `已连接 · ${t.tools} 个工具` : '连接失败') : '未测试'
     return `<div class="item ${sel ? 'sel' : ''}" data-mcp="${esc(m.id)}">
-      <div class="top">${ic('plug', 14).replace('<i ', '<i style="color:#7dd3fc;')}<span class="nm">${esc(m.name)}</span><span class="dot ${dot}"></span></div>
+      <div class="top">${ic('plug', 14, '#7dd3fc')}<span class="nm">${esc(m.name)}</span><span class="dot ${dot}"></span></div>
       <div class="meta"><span>${esc(m.type || 'stdio')}</span><span>${esc(meta)}</span></div>
     </div>`
   }).join('')

@@ -408,7 +408,7 @@ export class App {
 
 // ---------- 假 AI 服务（OpenAI 兼容 SSE）----------
 // respond(body, index) 可按请求内容返回自定义文本（字符串或片段数组）
-export async function startFakeAI({ chunks = ['你好', '，我是', '测试模型。'], thinking = [], delay = 20, respond = null } = {}) {
+export async function startFakeAI({ chunks = ['你好', '，我是', '测试模型。'], thinking = [], delay = 20, respond = null, usage = null } = {}) {
   const requests = []
   const server = http.createServer((req, res) => {
     if (req.method !== 'POST') { res.writeHead(404); res.end(); return }
@@ -434,6 +434,7 @@ export async function startFakeAI({ chunks = ['你好', '，我是', '测试模�
         res.write('data: ' + JSON.stringify({ choices: [{ delta: { content: text } }] }) + '\n\n')
         await sleep(delay)
       }
+      if (usage) res.write('data: ' + JSON.stringify({ choices: [], usage }) + '\n\n')
       res.write('data: [DONE]\n\n')
       res.end()
     })

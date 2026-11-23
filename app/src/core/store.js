@@ -9,10 +9,10 @@ let fileStore = null
 function setFileStore(adapter) { fileStore = adapter }
 
 const SCHEMA = `
-CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, name TEXT NOT NULL, created_at TEXT, updated_at TEXT);
+CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, name TEXT NOT NULL, parent_id TEXT DEFAULT '', brief TEXT DEFAULT '', brief_at TEXT DEFAULT '', created_at TEXT, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, name TEXT NOT NULL, group_id TEXT, type TEXT DEFAULT 'work',
-  status TEXT DEFAULT 'active', path TEXT NOT NULL, agent_id TEXT DEFAULT 'builtin', meta TEXT DEFAULT '{}',
-  brief TEXT DEFAULT '', brief_at TEXT DEFAULT '', created_at TEXT, updated_at TEXT);
+  status TEXT DEFAULT 'active', scope TEXT DEFAULT 'long', path TEXT NOT NULL, agent_id TEXT DEFAULT 'builtin', meta TEXT DEFAULT '{}',
+  brief TEXT DEFAULT '', brief_at TEXT DEFAULT '', deleted_at TEXT DEFAULT '', created_at TEXT, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS todos (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
   title TEXT NOT NULL, status TEXT DEFAULT 'todo', sort INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, role TEXT NOT NULL,
@@ -25,6 +25,7 @@ CREATE TABLE IF NOT EXISTS sessions (id TEXT PRIMARY KEY, task_id TEXT NOT NULL,
 CREATE TABLE IF NOT EXISTS runs (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, session_id TEXT DEFAULT '',
   parent_run_id TEXT DEFAULT '', agent_id TEXT DEFAULT '', model_id TEXT DEFAULT '',
   status TEXT DEFAULT 'running', prompt TEXT DEFAULT '', result TEXT DEFAULT '', tokens INTEGER DEFAULT 0,
+  input_tokens INTEGER DEFAULT 0, output_tokens INTEGER DEFAULT 0, cached_tokens INTEGER DEFAULT 0,
   error TEXT DEFAULT '', meta TEXT DEFAULT '{}', started_at TEXT, finished_at TEXT);
 CREATE TABLE IF NOT EXISTS providers (id TEXT PRIMARY KEY, name TEXT NOT NULL, type TEXT DEFAULT 'openai_compatible',
   base_url TEXT NOT NULL, created_at TEXT, updated_at TEXT);
@@ -95,6 +96,15 @@ function migrate(db, log) {
     if (!cols.includes('model_id')) db.exec("ALTER TABLE tasks ADD COLUMN model_id TEXT DEFAULT ''")
     if (!cols.includes('brief')) db.exec("ALTER TABLE tasks ADD COLUMN brief TEXT DEFAULT ''")
     if (!cols.includes('brief_at')) db.exec("ALTER TABLE tasks ADD COLUMN brief_at TEXT DEFAULT ''")
+    if (!cols.includes('deleted_at')) db.exec("ALTER TABLE tasks ADD COLUMN deleted_at TEXT DEFAULT ''")
+    if (!cols.includes('scope')) db.exec("ALTER TABLE tasks ADD COLUMN scope TEXT DEFAULT 'long'")
+  } catch {}
+  // groups 增加 parent_id（幂等）：支持子组嵌套
+  try {
+    const cols = db.prepare('PRAGMA table_info(groups)').all().map((c) => c.name)
+    if (!cols.includes('parent_id')) db.exec("ALTER TABLE groups ADD COLUMN parent_id TEXT DEFAULT ''")
+    if (!cols.includes('brief')) db.exec("ALTER TABLE groups ADD COLUMN brief TEXT DEFAULT ''")
+    if (!cols.includes('brief_at')) db.exec("ALTER TABLE groups ADD COLUMN brief_at TEXT DEFAULT ''")
   } catch {}
   // messages 增加会话/类型/运行元数据（幂等）
   try {
@@ -103,6 +113,13 @@ function migrate(db, log) {
     if (!cols.includes('kind')) db.exec("ALTER TABLE messages ADD COLUMN kind TEXT DEFAULT 'text'")
     if (!cols.includes('run_id')) db.exec("ALTER TABLE messages ADD COLUMN run_id TEXT DEFAULT ''")
     if (!cols.includes('meta')) db.exec("ALTER TABLE messages ADD COLUMN meta TEXT DEFAULT '{}'")
+  } catch {}
+  // runs 增加输入/输出/缓存 token 统计（幂等）
+  try {
+    const cols = db.prepare('PRAGMA table_info(runs)').all().map((c) => c.name)
+    if (!cols.includes('input_tokens')) db.exec('ALTER TABLE runs ADD COLUMN input_tokens INTEGER DEFAULT 0')
+    if (!cols.includes('output_tokens')) db.exec('ALTER TABLE runs ADD COLUMN output_tokens INTEGER DEFAULT 0')
+    if (!cols.includes('cached_tokens')) db.exec('ALTER TABLE runs ADD COLUMN cached_tokens INTEGER DEFAULT 0')
   } catch {}
   // 旧消息归入每个任务的主会话；任务级 resume id 迁到会话 meta
   try {
@@ -210,29 +227,77 @@ function makeStore(log) {
       if (h.kind === 'sqlite') return h.db.prepare('SELECT * FROM groups ORDER BY created_at').all()
       return h.data.groups
     },
-    createGroup(name) {
-      const id = uuid(), t = now()
+    createGroup(name, parentId) {
+      const id = uuid(), t = now(), pid = parentId || ''
       if (h.kind === 'sqlite') {
-        h.db.prepare('INSERT INTO groups (id,name,created_at,updated_at) VALUES (?,?,?,?)').run(id, name, t, t)
+        h.db.prepare('INSERT INTO groups (id,name,parent_id,brief,brief_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?)').run(id, name, pid, '', '', t, t)
         return h.db.prepare('SELECT * FROM groups WHERE id=?').get(id)
       }
-      const g = { id, name, created_at: t, updated_at: t }
+      const g = { id, name, parent_id: pid, brief: '', brief_at: '', created_at: t, updated_at: t }
       h.data.groups.push(g); persist(); return g
+    },
+    getGroup(id) {
+      if (h.kind === 'sqlite') return h.db.prepare('SELECT * FROM groups WHERE id=?').get(id)
+      return h.data.groups.find((x) => x.id === id)
+    },
+    updateGroup(id, patch) {
+      const t = now()
+      const allowed = ['name', 'parent_id', 'brief', 'brief_at']
+      if (h.kind === 'sqlite') {
+        const sets = [], vals = {}
+        for (const k of allowed) if (patch[k] !== undefined) { sets.push(`${k}=@${k}`); vals[k] = patch[k] }
+        if (!sets.length) return S.getGroup(id)
+        vals.updated_at = t; vals.id = id
+        h.db.prepare(`UPDATE groups SET ${sets.join(',')},updated_at=@updated_at WHERE id=@id`).run(vals)
+      } else {
+        const x = h.data.groups.find((y) => y.id === id); if (!x) return
+        for (const k of allowed) if (patch[k] !== undefined) x[k] = patch[k]
+        x.updated_at = t; persist()
+      }
+      return S.getGroup(id)
     },
     deleteGroup(id) {
       if (h.kind === 'sqlite') {
-        h.db.prepare('UPDATE tasks SET group_id=NULL WHERE group_id=?').run(id)
+        const g = h.db.prepare('SELECT * FROM groups WHERE id=?').get(id)
+        const parent = g ? (g.parent_id || '') : ''
+        // 子组与任务上提到被删组的父级（无父级则变为未分组）
+        h.db.prepare('UPDATE tasks SET group_id=? WHERE group_id=?').run(parent || null, id)
+        h.db.prepare('UPDATE groups SET parent_id=? WHERE parent_id=?').run(parent, id)
         h.db.prepare('DELETE FROM groups WHERE id=?').run(id)
       } else {
-        h.data.tasks.forEach((x) => { if (x.group_id === id) x.group_id = null })
+        const g = h.data.groups.find((x) => x.id === id)
+        const parent = g ? (g.parent_id || '') : ''
+        h.data.tasks.forEach((x) => { if (x.group_id === id) x.group_id = parent || null })
+        h.data.groups.forEach((x) => { if (x.parent_id === id) x.parent_id = parent })
         h.data.groups = h.data.groups.filter((x) => x.id !== id); persist()
       }
     },
 
     // ---- tasks ----
     listTasks() {
-      if (h.kind === 'sqlite') return h.db.prepare("SELECT * FROM tasks ORDER BY updated_at DESC").all()
-      return h.data.tasks
+      if (h.kind === 'sqlite') return h.db.prepare("SELECT * FROM tasks WHERE COALESCE(deleted_at,'')='' ORDER BY updated_at DESC").all()
+      return h.data.tasks.filter((x) => !x.deleted_at)
+    },
+    listTrashedTasks() {
+      if (h.kind === 'sqlite') return h.db.prepare("SELECT * FROM tasks WHERE COALESCE(deleted_at,'')!='' ORDER BY deleted_at DESC").all()
+      return h.data.tasks.filter((x) => x.deleted_at).sort((a, b) => String(b.deleted_at).localeCompare(String(a.deleted_at)))
+    },
+    trashTask(id) {
+      const t = now()
+      if (h.kind === 'sqlite') h.db.prepare('UPDATE tasks SET deleted_at=?, updated_at=? WHERE id=?').run(t, t, id)
+      else { const x = h.data.tasks.find((y) => y.id === id); if (x) { x.deleted_at = t; x.updated_at = t; persist() } }
+      return S.getTask(id)
+    },
+    restoreTask(id) {
+      const t = now()
+      if (h.kind === 'sqlite') h.db.prepare("UPDATE tasks SET deleted_at='', updated_at=? WHERE id=?").run(t, id)
+      else { const x = h.data.tasks.find((y) => y.id === id); if (x) { x.deleted_at = ''; x.updated_at = t; persist() } }
+      return S.getTask(id)
+    },
+    emptyTrash() {
+      const ids = S.listTrashedTasks().map((t) => t.id)
+      for (const id of ids) S.deleteTask(id)
+      return ids.length
     },
     getTask(id) {
       if (h.kind === 'sqlite') return h.db.prepare('SELECT * FROM tasks WHERE id=?').get(id)
@@ -242,16 +307,17 @@ function makeStore(log) {
       const id = uuid(), t = now()
       const meta = typeof dto.meta === 'string' ? dto.meta : JSON.stringify(dto.meta || {})
       const cols = { id, name: dto.name, group_id: dto.groupId || null, type: dto.type || 'work',
-        status: 'active', path: dto.path, agent_id: dto.agentId || 'builtin', meta, created_at: t, updated_at: t }
+        status: dto.status || 'active', scope: dto.scope || 'long', path: dto.path, agent_id: dto.agentId || 'builtin',
+        model_id: dto.modelId || '', meta, created_at: t, updated_at: t }
       if (h.kind === 'sqlite') {
-        h.db.prepare(`INSERT INTO tasks (id,name,group_id,type,status,path,agent_id,meta,created_at,updated_at)
-          VALUES (@id,@name,@group_id,@type,@status,@path,@agent_id,@meta,@created_at,@updated_at)`).run(cols)
+        h.db.prepare(`INSERT INTO tasks (id,name,group_id,type,status,scope,path,agent_id,model_id,meta,created_at,updated_at)
+          VALUES (@id,@name,@group_id,@type,@status,@scope,@path,@agent_id,@model_id,@meta,@created_at,@updated_at)`).run(cols)
         return S.getTask(id)
       }
       h.data.tasks.push(cols); persist(); return cols
     },
     updateTask(id, patch) {
-      const t = now(); const allowed = ['name', 'group_id', 'type', 'status', 'path', 'agent_id', 'model_id', 'meta', 'brief', 'brief_at']
+      const t = now(); const allowed = ['name', 'group_id', 'type', 'status', 'scope', 'path', 'agent_id', 'model_id', 'meta', 'brief', 'brief_at']
       if (h.kind === 'sqlite') {
         const sets = [], vals = {}
         for (const k of allowed) if (patch[k] !== undefined) { sets.push(`${k}=@${k}`); vals[k] = patch[k] }
@@ -271,6 +337,8 @@ function makeStore(log) {
         h.db.prepare('DELETE FROM messages WHERE task_id=?').run(id)
         h.db.prepare('DELETE FROM runs WHERE task_id=?').run(id)
         h.db.prepare('DELETE FROM sessions WHERE task_id=?').run(id)
+        h.db.prepare('DELETE FROM task_skills WHERE task_id=?').run(id)
+        h.db.prepare('DELETE FROM task_mcp WHERE task_id=?').run(id)
         h.db.prepare('DELETE FROM tasks WHERE id=?').run(id)
       } else {
         h.data.tasks = h.data.tasks.filter((x) => x.id !== id)
@@ -278,6 +346,8 @@ function makeStore(log) {
         h.data.messages = h.data.messages.filter((x) => x.task_id !== id)
         h.data.sessions = (h.data.sessions || []).filter((x) => x.task_id !== id)
         h.data.runs = (h.data.runs || []).filter((x) => x.task_id !== id)
+        h.data.task_skills = (h.data.task_skills || []).filter((x) => x.task_id !== id)
+        h.data.task_mcp = (h.data.task_mcp || []).filter((x) => x.task_id !== id)
         persist()
       }
     },
@@ -481,7 +551,8 @@ function makeStore(log) {
       try { if (fileStore && root) fileStore.sessionsDeleted({ taskId: root.task_id, sessionIds: list }) } catch {}
     },
     ensureSession(taskId) {
-      const list = S.listSessions(taskId)
+      // 跳过跨任务询问（kind='ask'）这类隐藏会话，避免被当成主会话
+      const list = S.listSessions(taskId).filter((s) => s.kind !== 'ask')
       if (list.length) return list[0]
       const task = S.getTask(taskId)
       if (!task) return null
@@ -495,12 +566,12 @@ function makeStore(log) {
       const rec = {
         id, task_id: d.taskId, session_id: d.sessionId || '', parent_run_id: d.parentRunId || '',
         agent_id: d.agentId || '', model_id: d.modelId || '', status: d.status || 'running',
-        prompt: d.prompt || '', result: '', tokens: 0, error: '',
+        prompt: d.prompt || '', result: '', tokens: 0, input_tokens: 0, output_tokens: 0, cached_tokens: 0, error: '',
         meta: typeof d.meta === 'string' ? d.meta : J(d.meta || {}), started_at: t, finished_at: ''
       }
       if (h.kind === 'sqlite') {
-        h.db.prepare(`INSERT INTO runs (id,task_id,session_id,parent_run_id,agent_id,model_id,status,prompt,result,tokens,error,meta,started_at,finished_at)
-          VALUES (@id,@task_id,@session_id,@parent_run_id,@agent_id,@model_id,@status,@prompt,@result,@tokens,@error,@meta,@started_at,@finished_at)`).run(rec)
+        h.db.prepare(`INSERT INTO runs (id,task_id,session_id,parent_run_id,agent_id,model_id,status,prompt,result,tokens,input_tokens,output_tokens,cached_tokens,error,meta,started_at,finished_at)
+          VALUES (@id,@task_id,@session_id,@parent_run_id,@agent_id,@model_id,@status,@prompt,@result,@tokens,@input_tokens,@output_tokens,@cached_tokens,@error,@meta,@started_at,@finished_at)`).run(rec)
       } else {
         h.data.runs = h.data.runs || []
         h.data.runs.push(rec); persist()
@@ -508,7 +579,7 @@ function makeStore(log) {
       return rec
     },
     updateRun(id, patch) {
-      const allowed = ['status', 'result', 'tokens', 'error', 'meta', 'finished_at', 'agent_id', 'model_id']
+      const allowed = ['status', 'result', 'tokens', 'input_tokens', 'output_tokens', 'cached_tokens', 'error', 'meta', 'finished_at', 'agent_id', 'model_id']
       if (h.kind === 'sqlite') {
         const sets = [], vals = { id }
         for (const k of allowed) if (patch[k] !== undefined) { sets.push(`${k}=@${k}`); vals[k] = patch[k] }

@@ -1,5 +1,5 @@
 // 设置视图
-import { store, dialog, fsapi } from '../lib/api.js'
+import { store, dialog, fsapi, invoke } from '../lib/api.js'
 import { state, emit } from '../lib/state.js'
 import { $, esc, refreshIcons } from '../lib/ui.js'
 import { reloadTasks } from '../lib/data.js'
@@ -33,6 +33,8 @@ export async function renderSettings() {
   const autoAi = (await store('settings.get', { key: 'ui:autoOpenAi', dflt: '1' })) !== '0'
   const defType = await store('settings.get', { key: 'newTask:type', dflt: 'work' })
   const outsiders = state.tasks.filter((t) => isLocalPath(t.path) && workdir && !underDir(t.path, workdir))
+  let appVer = ''
+  try { appVer = (await invoke('update', 'version')) || '' } catch {}
 
   body.innerHTML = `
     <h2>常规设置</h2><div class="sub">全局设置，对所有任务生效</div>
@@ -44,7 +46,7 @@ export async function renderSettings() {
       <div class="h">${outsiders.length} 个任务的文件夹位于工作目录之外，可迁移进来（移动到各自同名文件夹）</div>
       <div class="frow"><div class="ftxt" style="max-height:66px;overflow:auto">${esc(outsiders.map((t) => t.name).join('、'))}</div>
         <button class="btn" id="migrateOutsiders">迁移…</button></div></div>` : ''}
-    <div class="box"><div class="l">新任务默认类型</div><div class="h">work = 临时任务；code = 代码仓库</div>
+    <div class="box"><div class="l">新任务默认类型</div><div class="h">work = 通用任务；code = 代码仓库</div>
       <div class="frow"><div class="ftxt" style="max-width:170px" id="defTypeVal">${esc(defType)}</div>
         <button class="btn" id="toggleDefType">切换</button></div></div>
     <div class="box"><div class="frow" style="justify-content:space-between">
@@ -52,7 +54,7 @@ export async function renderSettings() {
         <span class="tg ${autoAi ? 'on' : ''}" id="toggleAutoAi"></span></div></div>
     <div class="box"><div class="l">数据存储</div><div class="h">${esc(info.kind === 'sqlite' ? 'SQLite（WAL）' : 'JSON 回退')} · ${esc(info.path || '')}</div>
       <div class="frow"><button class="btn" id="openDataDir">打开数据目录</button></div></div>
-    <div class="box"><div class="l">关于</div><div class="h">zzwork 0.4 · Electron ${esc((window.zzwork && window.zzwork.version) || '43')} · 独立壳（不再依赖 VS Code 内核）</div></div>`
+    <div class="box"><div class="l">关于</div><div class="h">zzwork ${esc(appVer || '0.4')} · Electron ${esc((window.zzwork && window.zzwork.version) || '43')} · 独立壳（不再依赖 VS Code 内核）</div></div>`
   refreshIcons()
 
   $('#changeWorkdir').addEventListener('click', async () => {

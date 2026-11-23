@@ -15,8 +15,11 @@ const CASE_FILES = [
   'changes.mjs',
   'settings.mjs',
   'session-chat.mjs',
+  'session-prompt.mjs',
   'session-files.mjs',
   'features.mjs',
+  'board.mjs',
+  'featuremap.mjs',
   'terminal.mjs',
   'security.mjs'
 ]

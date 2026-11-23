@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
+import { sleep } from '../harness.mjs'
 import { selectTask, setView, ensureTask } from './_helpers.mjs'
 
 const infoText = async (app) => app.text('#infoBody')
@@ -58,7 +61,7 @@ export default [
       await ensureTask(app, '主任务改名')
       await setView(app, 'projects')
       await app.contextMenu('#projectsBody', '新建组')
-      await app.modalFill({ value: '信息组' })
+      await app.modalFill({ name: '信息组' })
       await app.modalOk()
       const g = (await app.store('groups.list')).find((x) => x.name === '信息组')
       await selectTask(app, '主任务改名')
@@ -141,6 +144,52 @@ export default [
       await app.waitFor(`true`)
       exM = await app.store('taskMcp.excluded', { taskId: t.id })
       assert.deepEqual(exM, [])
+    }
+  },
+  {
+    name: '任务状态可切换 / 关键信息 / Skills 紧凑显示',
+    async run(app) {
+      const t0 = await ensureTask(app, '主任务改名')
+      await selectTask(app, '主任务改名')
+      assert.ok(await app.exists('#statusSel'), '状态选择器应存在')
+      assert.equal(await app.exists('#memoryBox'), false, '任务记忆 UI 应已移除')
+
+      await app.selectValue('#statusSel', 'paused')
+      await app.waitFor(`(async () => {
+        const ts = await window.zzwork.invoke('store', 'tasks.list')
+        const x = ts.find((v) => v.id === ${JSON.stringify(t0.id)})
+        return !!(x && x.status === 'paused')
+      })()`, 8000, '状态已保存 paused')
+      await app.waitFor(`(() => {
+        const s = document.querySelector('#statusSel')
+        return !!s && s.value === 'paused' && s.classList.contains('st-paused')
+      })()`, 8000, '状态选择器回显 paused')
+
+      await app.waitFor(() => !!document.querySelector('#keyinfoBox'), 8000, '关键信息输入框出现')
+      await app.setValue('#keyinfoBox', '测试账号：admin\nAPI Key：sk-info-key')
+      await sleep(1000)
+      const keyinfoPath = path.join(t0.path, '.zzwork', 'keyinfo.md')
+      assert.ok(fs.existsSync(keyinfoPath), '关键信息应落盘到 .zzwork/keyinfo.md')
+      assert.ok(fs.readFileSync(keyinfoPath, 'utf8').includes('sk-info-key'))
+
+      const skill = (await app.store('skills.list')).find((s) => s.name === 'demo-skill')
+      assert.ok(skill)
+      const chip = await app.call((id) => {
+        const input = document.querySelector(`#skillToggles input[data-skill="${id}"]`)
+        if (!input) return null
+        const label = input.closest('.chkchip')
+        return label ? { text: label.textContent.trim(), title: label.getAttribute('title'), chip: label.classList.contains('chkchip') } : null
+      }, skill.id)
+      assert.ok(chip && chip.chip, 'Skill 应以 chip 呈现')
+      assert.equal(chip.text, 'demo-skill', 'chip 只显示名字')
+      assert.equal(chip.title, '回归测试用 Skill', 'chip 悬浮显示描述')
+
+      await app.selectValue('#statusSel', 'active')
+      await app.waitFor(`(async () => {
+        const ts = await window.zzwork.invoke('store', 'tasks.list')
+        const x = ts.find((v) => v.id === ${JSON.stringify(t0.id)})
+        return !!(x && x.status === 'active')
+      })()`, 8000, '状态恢复 active')
     }
   },
   {

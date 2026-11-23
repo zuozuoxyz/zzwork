@@ -6,8 +6,8 @@ export default [
     name: '窗口与视图渲染',
     async run(app) {
       assert.equal(await app.text('.brand'), 'zzwork')
-      assert.equal(await app.count('.abi[data-view]'), 5)
-      assert.equal(await app.count('.panel'), 6)
+      assert.equal(await app.count('.abi[data-view]'), 6)
+      assert.equal(await app.count('.panel'), 7)
       assert.ok(await app.exists('#tabbar .tab'))
       assert.ok(await app.exists('#stVersion'))
     }
