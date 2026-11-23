@@ -325,6 +325,19 @@ export default [
       await app.waitFor(`document.getElementById('fmTitle').textContent.includes('全屏任务')`, 8000, '功能图顶部显示任务名')
       await app.clickEl('#fmFullscreen')
       await app.waitFor(`document.getElementById('featureMapHost').classList.contains('zz-fullscreen')`, 8000, '功能图进入全屏')
+      // 回归：全屏工具栏（放大/缩小/自适应/退出全屏）不能压到原生窗口按钮（titleBarOverlay 顶部 30px），否则点不到
+      const probe = await app.call(() => ['fmZoomOut', 'fmZoomIn', 'fmFit', 'fmFullscreen'].map((id) => {
+        const el = document.getElementById(id)
+        if (!el) return { id, ok: false, why: 'missing' }
+        const r = el.getBoundingClientRect()
+        const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+        return { id, top: Math.round(r.top), w: Math.round(r.width), hit: !!top && (top === el || el.contains(top)) }
+      }))
+      for (const b of probe) {
+        assert.ok(b.w > 0, `${b.id} 全屏下应有尺寸`)
+        assert.ok(b.top >= 30, `${b.id} 全屏下应位于标题栏下方（top≥30，避开原生窗口按钮），实际 top=${b.top}`)
+        assert.ok(b.hit, `${b.id} 全屏下中心点应可点击（未被遮挡）`)
+      }
       await app.clickEl('#fmFullscreen')
       await app.waitFor(`!document.getElementById('featureMapHost').classList.contains('zz-fullscreen')`, 8000, '功能图退出全屏')
 
@@ -334,6 +347,16 @@ export default [
       await app.waitFor(`document.getElementById('bdTitle').textContent.includes('全屏任务')`, 8000, '画板顶部显示任务名')
       await app.clickEl('#bdFullscreen')
       await app.waitFor(`document.getElementById('boardHost').classList.contains('zz-fullscreen')`, 8000, '画板进入全屏')
+      const bdProbe = await app.call(() => ['bdFit', 'bdFullscreen'].map((id) => {
+        const el = document.getElementById(id)
+        if (!el) return { id, ok: false, why: 'missing' }
+        const r = el.getBoundingClientRect()
+        const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+        return { id, top: Math.round(r.top), w: Math.round(r.width), hit: !!top && (top === el || el.contains(top)) }
+      }))
+      for (const b of bdProbe) {
+        assert.ok(b.w > 0 && b.top >= 30 && b.hit, `${b.id} 画板全屏下应可点击且避开原生窗口按钮，实际 ${JSON.stringify(b)}`)
+      }
       await app.clickEl('#bdFullscreen')
       await app.waitFor(`!document.getElementById('boardHost').classList.contains('zz-fullscreen')`, 8000, '画板退出全屏')
     }

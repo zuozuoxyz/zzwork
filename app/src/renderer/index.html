@@ -88,11 +88,12 @@
         </div>
 
         <div class="panel" id="panel-board">
-          <div class="phead"><span class="t">看板</span>
+          <div class="phead"><span class="t" id="boardPheadTitle">看板</span>
             <button class="ib" id="boardNewBtn" title="新建卡片"><i data-lucide="square-plus" style="width:14px;height:14px"></i></button>
             <button class="ib" id="boardRefreshBtn" title="刷新"><i data-lucide="rotate-cw" style="width:13px;height:13px"></i></button>
           </div>
           <div class="pbody" id="boardSideBody"></div>
+          <div class="pbody" id="boardSideFiles" style="display:none"></div>
         </div>
 
         <div class="panel" id="panel-envs">
@@ -235,6 +236,12 @@
         <div class="pane" id="pane-item"><div class="setbody" id="itemBody"></div></div>
         <div class="pane" id="pane-settings"><div class="setbody" id="settingsBody"></div></div>
         <div class="pane" id="pane-board"><div class="boardpane" id="boardBody"></div></div>
+
+        <div class="pane" id="pane-card">
+          <div class="cardwrap">
+            <div class="cardchat" id="cardChat"></div>
+          </div>
+        </div>
 
         <div class="term-panel" id="termPanel">
           <div class="term-grip" id="termResize"></div>

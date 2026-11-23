@@ -1,6 +1,6 @@
 // 渲染层入口：启动、数据装载、视图路由
 import { $, $$, refreshIcons } from './lib/ui.js'
-import { store, dialog, env as envApi } from './lib/api.js'
+import { store, dialog, env as envApi, fsapi } from './lib/api.js'
 import { state, on, emit } from './lib/state.js'
 import { loadBase, reloadSkills, scanAll } from './lib/data.js'
 import { initProjectsView, renderProjects } from './views/projects.js'
@@ -11,12 +11,13 @@ import { initMcpView, renderMcp, renderMcpDetail } from './views/mcp.js'
 import { initModelsView, renderModels, renderModelDetail, renderProviderDetail } from './views/models.js'
 import { renderSettings } from './views/settings.js'
 import { initInboxView, renderInboxBoard, renderInboxCode } from './views/inbox.js'
-import { renderBoard, initBoardView } from './views/board.js'
+import { renderBoard, initBoardView, mountCardChat, previewCardFile } from './views/board.js'
 import { renderTabs, showPane } from './workbench/tabs.js'
 import { renderInfo } from './workbench/info.js'
 import { renderSession, initSessionView } from './workbench/session.js'
 import { renderChat, refreshChatHeader, initChatView } from './workbench/chat.js'
 import { openFile, activate, closeFile, closeAllFiles, restoreForTask } from './workbench/editor.js'
+import { renderFileTree } from './workbench/fileTree.js'
 import { initTerminalView, attachTaskTerminal } from './workbench/terminal.js'
 import { initUpdate } from './update.js'
 
@@ -36,10 +37,110 @@ const TASK_PANES = new Set(['info', 'session', 'ai', 'file'])
 function rememberTaskPane() {
   if (TASK_PANES.has(state.pane)) state.lastTaskPane = state.pane
 }
+
+// 当前挂载在 #cardChat 的卡片对话清理函数（切换/关闭卡片标签时释放订阅）
+let cardChatCleanup = null
+function cleanupCardChat() {
+  if (cardChatCleanup) { try { cardChatCleanup() } catch {} ; cardChatCleanup = null }
+}
+function cardById(id) {
+  return state.boardCards.find((c) => c.id === id) || state.tasks.find((t) => t.id === id) || null
+}
+// 离开看板上下文（进入设置/详情/便签/切换任务）时放弃卡片标签，避免其残留后再次出现
+function abandonCardTabs() {
+  if (!state.cardTabs.length && state.cardActive == null) return
+  cleanupCardChat()
+  state.cardTabs = []
+  state.cardActive = null
+}
+// 把某张卡片的 AI 对话挂载到编辑区 #cardChat；工作目录树显示在左侧系统侧栏
+function mountActiveCard(card, preset) {
+  const chatHost = $('#cardChat')
+  if (!chatHost) return
+  cleanupCardChat()
+  cardChatCleanup = mountCardChat(chatHost, card, preset)
+}
+
+// 左侧栏在「看板配置」与「卡片工作目录树」之间切换：只有看板页面才显示模型/执行体等配置
+function showBoardSideConfig() {
+  const cfg = $('#boardSideBody'), files = $('#boardSideFiles')
+  if (cfg) cfg.style.display = ''
+  if (files) files.style.display = 'none'
+  const t = $('#boardPheadTitle'); if (t) t.textContent = '看板'
+  const nb = $('#boardNewBtn'); if (nb) nb.style.display = ''
+  const rb = $('#boardRefreshBtn'); if (rb) rb.style.display = ''
+}
+function showBoardSideFiles(card) {
+  if (!card) return
+  const cfg = $('#boardSideBody'), files = $('#boardSideFiles')
+  if (cfg) cfg.style.display = 'none'
+  if (files) files.style.display = ''
+  const t = $('#boardPheadTitle'); if (t) t.textContent = '工作目录'
+  const nb = $('#boardNewBtn'); if (nb) nb.style.display = 'none'
+  const rb = $('#boardRefreshBtn'); if (rb) rb.style.display = 'none'
+  // 未开始的卡片目录可能尚未创建，先建好再渲染（允许直接在其中放文件）
+  fsapi('mkdir', { path: card.path }).catch(() => {}).finally(() => {
+    if (state.cardActive === card.id && files) renderFileTree(files, { root: card.path, onOpenFile: previewCardFile })
+  })
+}
+// 依据当前编辑区是否为「卡片对话」pane 决定侧栏内容
+function syncBoardSide() {
+  if (state.view !== 'board') return
+  if (state.pane === 'card' && state.cardActive) showBoardSideFiles(cardById(state.cardActive))
+  else showBoardSideConfig()
+}
+function openCardTab(card, preset) {
+  if (!card || !card.id) return
+  rememberTaskPane()
+  state.mode = 'card'
+  state.item = null
+  setView('board')
+  let t = state.cardTabs.find((x) => x.id === card.id)
+  if (!t) { t = { id: card.id, name: card.name || '卡片' }; state.cardTabs.push(t) }
+  else if (card.name) t.name = card.name
+  state.cardActive = card.id
+  renderTabs()
+  showPane('card')
+  mountActiveCard(card, preset)
+}
+function activateCardTab(id) {
+  if (!id) return
+  const card = cardById(id)
+  if (!card) return
+  state.cardActive = id
+  renderTabs()
+  showPane('card')
+  mountActiveCard(card)
+}
+function closeCardTab(id) {
+  const idx = state.cardTabs.findIndex((x) => x.id === id)
+  if (idx === -1) return
+  const wasActive = state.cardActive === id
+  state.cardTabs.splice(idx, 1)
+  if (!wasActive) { renderTabs(); return }
+  cleanupCardChat()
+  const next = state.cardTabs[idx] || state.cardTabs[idx - 1] || null
+  if (next) {
+    state.cardActive = next.id
+    renderTabs()
+    showPane('card')
+    const card = cardById(next.id)
+    if (card) mountActiveCard(card)
+  } else {
+    // 最后一张卡片关闭 → 回到看板
+    state.cardActive = null
+    state.mode = 'board'
+    renderTabs()
+    showPane('board')
+    renderBoard().catch((e) => console.error('[board]', e))
+  }
+}
+
 // 从看板/设置/详情切回常规任务视图：右栏大块必须跟着切走，不能停留在整页模式
 function exitSpecialMode() {
   if (state.mode === 'item') { closeItem(); return }
-  if (state.mode === 'board' || state.mode === 'settings') {
+  abandonCardTabs()
+  if (state.mode === 'board' || state.mode === 'settings' || state.mode === 'card') {
     state.mode = 'task'
     state.item = null
     let next = state.taskId ? (state.lastTaskPane || 'ai') : 'info'
@@ -80,6 +181,7 @@ function renderSidebars() {
 }
 
 async function selectTask(id) {
+  abandonCardTabs()
   if (!id) {
     closeAllFiles(state.taskId)
     state.taskId = null
@@ -129,6 +231,7 @@ async function selectTask(id) {
 }
 
 function openItem(payload) {
+  abandonCardTabs()
   rememberTaskPane()
   const kind = payload.kind
   const id = payload.id
@@ -175,6 +278,7 @@ function closeItem() {
 }
 
 async function openInbox() {
+  abandonCardTabs()
   state.inboxOpen = true
   state.mode = 'task'
   state.item = null
@@ -192,15 +296,17 @@ function closeInbox() {
 
 function openBoard() {
   rememberTaskPane()
-  state.mode = 'board'
   state.item = null
   setView('board')
+  // 已有卡片标签时保留它们（标签条仍显示卡片），仅把编辑区切回看板
+  state.mode = state.cardTabs.length ? 'card' : 'board'
   renderTabs()
   showPane('board')
   renderBoard().catch((e) => console.error('[board]', e))
 }
 
 function openSettings() {
+  abandonCardTabs()
   rememberTaskPane()
   state.mode = 'settings'
   setView('settings')
@@ -244,6 +350,9 @@ function bindEvents() {
   on('open-inbox', openInbox)
   on('close-inbox', closeInbox)
   on('open-settings', openSettings)
+  on('open-card-tab', (p) => { if (p && p.card) openCardTab(p.card, p.sessionId) })
+  on('card-activate', activateCardTab)
+  on('card-close', closeCardTab)
   on('tabs-changed', renderTabs)
   on('file-activate', (p) => { if (p) activate(p) })
   on('file-close', (p) => { if (p) closeFile(p) })
@@ -261,6 +370,8 @@ function bindEvents() {
     }
   })
   on('pane-changed', (name) => {
+    // 编辑区在「看板」与「卡片对话」间切换时，左侧栏同步切回看板配置/工作目录树
+    syncBoardSide()
     if (name === 'ai' && state.taskId) refreshChatHeader()
   })
   on('open-session', async ({ taskId, sessionId } = {}) => {

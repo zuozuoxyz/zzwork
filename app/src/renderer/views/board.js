@@ -1,7 +1,7 @@
 // 短期任务看板：卡片复用 tasks(scope='board')，进行中卡片内嵌 AI 会话
-import { invoke, store, env as envApi, chat as chatApi, onChatEvent } from '../lib/api.js'
+import { invoke, store, env as envApi, chat as chatApi, onChatEvent, fsapi } from '../lib/api.js'
 import { state, emit } from '../lib/state.js'
-import { $, esc, ic, refreshIcons } from '../lib/ui.js'
+import { $, esc, ic, refreshIcons, basename } from '../lib/ui.js'
 import { reloadBoard } from '../lib/data.js'
 import { renderMarkdown } from '../components/markdown.js'
 import { toast } from '../components/toast.js'
@@ -237,7 +237,7 @@ async function startCard(card, opts = {}) {
   const r = await boardInvoke('start', { id: card.id })
   await renderBoard()
   if (open) {
-    await openChat({ ...card, status: 'doing' }, { sessionId: r && r.sessionId, runId: r && r.runId })
+    emit('open-card-tab', { card: { ...card, status: 'doing' }, sessionId: r && r.sessionId })
   } else if (r && r.runId) {
     // 后台执行：等运行结束后刷新看板（作答完成会自动进入待审核），不弹任何框
     await waitRun(r.runId)
@@ -264,22 +264,20 @@ async function stopCard(card) {
 }
 
 async function openCard(card) {
-  if (card.status === 'todo' || card.status === 'done') await editCard(card)
-  else await openChat(card)
+  if (!card) return
+  // 未开始的临时任务点开是「编辑」，不打开 AI 对话标签；进行中/待审核/已完成进入对话标签
+  if (card.status === 'todo') { await editCard(card); return }
+  emit('open-card-tab', { card })
 }
 
 async function editCard(card) {
+  if (card && card.status && card.status !== 'todo') { toast('只有未开始的临时任务才能编辑', 'err'); return }
   const r = await openEditor(card, true)
   if (!r || r.cancel) return
   try {
     await boardInvoke('update', { id: card.id, title: r.title, content: r.content })
-    if (r.start) {
-      const s = await boardInvoke('start', { id: card.id })
-      await renderBoard()
-      await openChat({ ...card, name: r.title, status: 'doing' }, { sessionId: s && s.sessionId, runId: s && s.runId })
-    } else {
-      await renderBoard()
-    }
+    // 仅保存：不打开对话标签，停留在看板
+    await renderBoard()
   } catch (e) { toast('保存失败：' + e.message, 'err') }
 }
 
@@ -319,8 +317,7 @@ function openEditor(card, existing) {
       <div class="bfoot">
         <span class="sp"></span>
         <button class="btn" data-act="cancel">取消</button>
-        <button class="btn" data-act="save">保存</button>
-        <button class="btn pri" data-act="start">保存并对话</button>
+        <button class="btn pri" data-act="save">保存</button>
       </div>`)
     const finish = (v) => { close(); resolve(v) }
     const collect = () => ({
@@ -329,8 +326,11 @@ function openEditor(card, existing) {
     })
     mask.querySelector('[data-act="cancel"]').addEventListener('click', () => finish({ cancel: true }))
     mask.querySelector('[data-act="save"]').addEventListener('click', () => finish({ save: true, ...collect() }))
-    mask.querySelector('[data-act="start"]').addEventListener('click', () => finish({ save: true, start: true, ...collect() }))
-    mask.addEventListener('mousedown', (e) => { if (e.target === mask) finish({ cancel: true }) })
+    // 回车保存、Esc 取消，避免只能靠点按钮关闭
+    mask.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); finish({ cancel: true }) }
+      else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); finish({ save: true, ...collect() }) }
+    })
     setTimeout(() => { const t = mask.querySelector('#bcTitle'); if (t) t.focus() }, 30)
   })
 }
@@ -382,43 +382,132 @@ function cardPartsHtml(parts, streaming) {
   }
   return out.join('')
 }
+// 文件改动卡片：与任务里的 AI 对话保持一致（可展开的文件 diff）
+const CARD_DIFF_LIMIT = 8000
+function cardDiffPre(text) {
+  return String(text || '').replace(/\n$/, '').split(/\r?\n/).map((line) => {
+    let cls = 'dl'
+    if (line.startsWith('+++') || line.startsWith('---') || line.startsWith('diff --git') || line.startsWith('index ')) cls += ' meta'
+    else if (line.startsWith('@@')) cls += ' hunk'
+    else if (line.startsWith('+')) cls += ' in'
+    else if (line.startsWith('-')) cls += ' out'
+    return `<span class="${cls}">${esc(line) || ' '}</span>`
+  }).join('')
+}
+function cardDiffFileHtml(f) {
+  const file = f || {}
+  const st = file.status === 'added' ? 'A' : file.status === 'deleted' ? 'D' : 'M'
+  const cls = file.status === 'added' ? 'add' : file.status === 'deleted' ? 'del' : 'mod'
+  let body = ''
+  if (file.binary) body = `<div class="dtag">二进制文件</div>`
+  else if (file.patch) {
+    const full = String(file.patch)
+    const shown = full.length > CARD_DIFF_LIMIT ? full.slice(0, CARD_DIFF_LIMIT) + '\n…（已截断）' : full
+    body = `<pre>${cardDiffPre(shown)}</pre>`
+  }
+  return `<details class="drow"><summary><span class="dst ${cls}">${st}</span>
+    <span class="dp">${esc(file.path || '')}</span>
+    <span class="dn"><span class="plus">+${Number(file.adds) || 0}</span><span class="minus">−${Number(file.dels) || 0}</span></span></summary>${body}</details>`
+}
+function cardDiffHtml(m) {
+  const meta = m.meta || {}
+  const files = Array.isArray(meta.files) ? meta.files : []
+  const rows = files.map(cardDiffFileHtml).join('')
+  const note = meta.note ? `<span class="dnote">${esc(meta.note)}</span>` : ''
+  const adds = files.reduce((n, f) => n + (Number(f.adds) || 0), 0)
+  const dels = files.reduce((n, f) => n + (Number(f.dels) || 0), 0)
+  const open = files.length > 5 ? '' : ' open'
+  return `<details class="diffbox"${open} data-mid="${esc(m.id)}"><summary class="dhead">
+    <span class="dbchev">${ic('chevron-right', 12)}</span>${ic('git-compare', 13)}
+    <span class="dtitle">${esc(m.content || '本次修改')}</span>
+    <span class="dfiles">${files.length} 个文件</span>
+    <span class="dstat"><span class="plus">+${adds}</span><span class="minus">−${dels}</span></span>
+    ${note}</summary>
+    <div class="dbody">${rows}</div></details>`
+}
 function cardMsgHtml(m) {
+  if (m.kind === 'diff') return `<div class="carddiff">${cardDiffHtml(m)}</div>`
   if (m.role === 'user') return `<div class="bmsg u">${esc(m.content || '')}</div>`
   if (m.kind === 'error') return `<div class="err">${esc(m.content || '')}</div>`
   if (m.pending) return `<div class="bmsg a"><div class="bpend"><span class="tspin"></span><span>思考中…</span></div></div>`
   return `<div class="bmsg a">${cardPartsHtml(cardPartsOf(m), !!m.stream)}</div>`
 }
 
-async function openChat(card, preset) {
-  const pre = preset && typeof preset === 'object' ? preset : { sessionId: preset || '' }
-  const { mask, close } = showModal(`
-    <div class="mt">${esc(card.name)} <span class="bsub" id="bcStatus">进行中</span></div>
+function chatHtml(card) {
+  return `
+    <div class="cardchat-h">
+      <span class="cardchat-t" title="${esc(card.name || '')}">${esc(card.name || '')}</span>
+      <span class="bsub" id="bcStatus">进行中</span>
+      <span class="sp"></span>
+      <button class="btn sm" data-cardedit title="编辑名称与详情">${ic('pencil', 12)}<span>编辑</span></button>
+      <button class="btn sm" data-act="stop" style="display:none">停止</button>
+    </div>
     <div class="bchat" id="bcMsgs"><div class="hint">加载中…</div></div>
-    <div class="bchat-in">
+    <div class="bchat-in" id="bcInWrap">
       <textarea class="bta" id="bcInput" rows="2" placeholder="继续追问…（Enter 发送，Shift+Enter 换行）"></textarea>
       <div class="bchat-act">
-        <button class="btn" data-act="stop" style="display:none">停止</button>
         <button class="btn pri" data-act="send">发送</button>
       </div>
-    </div>`)
-  const box = mask.querySelector('#bcMsgs')
-  const statusEl = mask.querySelector('#bcStatus')
-  const sendBtn = mask.querySelector('[data-act="send"]')
-  const stopBtn = mask.querySelector('[data-act="stop"]')
-  const input = mask.querySelector('#bcInput')
-  const syncRunning = () => { if (stopBtn) stopBtn.style.display = running ? '' : 'none' }
+    </div>`
+}
+
+// 把看板卡片的 AI 对话挂载到常驻宿主（#cardChat），数据走 board 管线；返回 cleanup
+export function mountCardChat(hostEl, card, preset) {
+  const pre = preset && typeof preset === 'object' ? preset : { sessionId: preset || '' }
+  hostEl.innerHTML = chatHtml(card)
+  const box = hostEl.querySelector('#bcMsgs')
+  const statusEl = hostEl.querySelector('#bcStatus')
+  const sendBtn = hostEl.querySelector('[data-act="send"]')
+  const stopBtn = hostEl.querySelector('[data-act="stop"]')
+  const inputWrap = hostEl.querySelector('#bcInWrap')
+  const input = hostEl.querySelector('#bcInput')
+  const editBtn = hostEl.querySelector('[data-cardedit]')
+
   const LABEL = { todo: '未开始', doing: '进行中', review: '待审核', done: '已完成' }
-  const setStatus = (s) => { card.status = s; statusEl.textContent = LABEL[s] || s; statusEl.className = 'bsub ' + s }
-  setStatus(card.status || 'doing')
+  const content = String((card.meta && card.meta.content) || '')
   let sessionId = pre.sessionId || ''
   let running = false
   let msgs = []
   let unsub = () => {}
   let rafFrame = 0
-  const closeChat = () => { try { unsub() } catch {}; if (rafFrame) cancelAnimationFrame(rafFrame); close() }
+  let status = card.status || 'todo'
 
+  const syncRunning = () => { if (stopBtn) stopBtn.style.display = running ? '' : 'none' }
+  const setStatus = (s) => {
+    status = s
+    statusEl.textContent = LABEL[s] || s
+    statusEl.className = 'bsub ' + s
+    // 未开始先展示详情 + 开始作答；已完成只读，均隐藏输入区
+    if (inputWrap) inputWrap.style.display = (s === 'todo' || s === 'done') ? 'none' : ''
+    // 只有未开始的任务才允许编辑
+    if (editBtn) editBtn.style.display = s === 'todo' ? '' : 'none'
+    syncRunning()
+  }
+  setStatus(status)
+
+  const cleanup = () => {
+    try { unsub() } catch {}
+    if (rafFrame) cancelAnimationFrame(rafFrame)
+    rafFrame = 0
+  }
+
+  const renderTodo = () => {
+    const body = content
+      ? `<div class="cardbrief-l">任务详情</div><div class="cardbrief">${renderMarkdown(content)}</div>`
+      : `<div class="hint">这个任务还没有详情，点「编辑」补充后再开始作答。</div>`
+    box.innerHTML = `${body}<div class="bstartwrap"><button class="btn pri" data-act="startRun">${ic('play', 12)}<span>开始作答</span></button></div>`
+    refreshIcons()
+  }
   const render = () => {
-    if (!msgs.length) { box.innerHTML = `<div class="hint">AI 正在根据标题与内容作答…</div>`; return }
+    if (!msgs.length) {
+      if (status === 'todo') { renderTodo(); return }
+      const detail = content ? `<div class="cardbrief-l">任务详情</div><div class="cardbrief">${renderMarkdown(content)}</div>` : ''
+      if (status === 'done') { box.innerHTML = `${detail}<div class="hint">该任务已完成，仅供查看。</div>`; refreshIcons(); return }
+      // 进行中/待审核但暂无历史消息：展示任务详情，避免空白
+      box.innerHTML = detail || `<div class="hint">AI 正在根据标题与内容作答…</div>`
+      refreshIcons()
+      return
+    }
     box.innerHTML = msgs.map(cardMsgHtml).join('')
     box.scrollTop = box.scrollHeight
     refreshIcons()
@@ -466,7 +555,7 @@ async function openChat(card, preset) {
     try {
       const list = await boardInvoke('list')
       const c = list.find((x) => x.id === card.id)
-      if (c) setStatus(c.status)
+      if (c) { card.status = c.status; setStatus(c.status) }
     } catch {}
     renderBoard().catch(() => {})
   }
@@ -485,6 +574,13 @@ async function openChat(card, preset) {
     if (type === 'thinking') { const m = ensureStream(); m.pending = false; pushThink(m, ev.text); scheduleRender(); return }
     if (type === 'delta') { const m = ensureStream(); m.pending = false; pushText(m, ev.text); scheduleRender(); return }
     if (type === 'step') { const m = ensureStream(); m.pending = false; upsertTool(m, ev.step || {}); scheduleRender(); return }
+    if (type === 'diff') {
+      msgs.push({
+        id: ev.messageId || ('diff-' + Date.now()), role: 'assistant', kind: 'diff', content: ev.summary || '',
+        meta: { files: ev.files || [], note: ev.note || '' }
+      })
+      render(); return
+    }
     if (type === 'done') {
       running = false
       syncRunning()
@@ -498,24 +594,43 @@ async function openChat(card, preset) {
     }
   }
 
-  try {
-    const info = await chatApi('init', { taskId: card.id, sessionId })
-    sessionId = (info && info.session && info.session.id) || sessionId
-    msgs = (info && info.messages || []).map((m) => ({ ...m, meta: cardMeta(m.meta) }))
-    const live = info && info.live
-    if (live && live.runId) {
-      running = true
-      const parts = (Array.isArray(live.parts) ? live.parts : []).map((p) => ({ ...p }))
-      msgs.push({ role: 'assistant', content: live.content || '', parts, stream: true, pending: !parts.length, meta: {} })
-    }
-    render()
-    syncRunning()
-  } catch (e) { box.innerHTML = `<div class="err">加载会话失败：${esc(e.message)}</div>` }
+  const loadInit = async () => {
+    try {
+      const info = await chatApi('init', { taskId: card.id, sessionId })
+      sessionId = (info && info.session && info.session.id) || sessionId
+      msgs = (info && info.messages || []).map((m) => ({ ...m, meta: cardMeta(m.meta) }))
+      const live = info && info.live
+      if (live && live.runId) {
+        running = true
+        const parts = (Array.isArray(live.parts) ? live.parts : []).map((p) => ({ ...p }))
+        msgs.push({ role: 'assistant', content: live.content || '', parts, stream: true, pending: !parts.length, meta: {} })
+      } else {
+        running = false
+      }
+      render()
+      syncRunning()
+    } catch (e) { box.innerHTML = `<div class="err">加载会话失败：${esc(e.message)}</div>` }
+  }
 
-  unsub = onChatEvent(onEvent)
-  refreshStatus()
+  const startRun = async () => {
+    if (running) return
+    running = true
+    syncRunning()
+    try {
+      const s = await boardInvoke('start', { id: card.id })
+      if (s && s.sessionId) sessionId = s.sessionId
+      setStatus('doing')
+      renderBoard().catch(() => {})
+      await loadInit()
+    } catch (e) {
+      running = false
+      syncRunning()
+      toast('开始失败：' + e.message, 'err')
+    }
+  }
 
   const send = async () => {
+    if (status === 'done') return
     const text = input.value.trim()
     if (!text || running || sendBtn.disabled) return
     input.value = ''
@@ -542,9 +657,33 @@ async function openChat(card, preset) {
     setStatus('review')
     refreshStatus()
   }
+
+  box.addEventListener('click', (e) => { if (e.target.closest('[data-act="startRun"]')) startRun() })
   sendBtn.addEventListener('click', send)
   stopBtn.addEventListener('click', stopRun)
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send() } })
-  mask.addEventListener('mousedown', (e) => { if (e.target === mask) closeChat() })
-  setTimeout(() => input.focus(), 60)
+  if (editBtn) editBtn.addEventListener('click', () => editCard(card).catch((err) => toast(err.message, 'err')))
+
+  unsub = onChatEvent(onEvent)
+  if (status === 'todo') { render(); refreshStatus() }
+  else { loadInit(); refreshStatus() }
+  setTimeout(() => { try { if (status !== 'todo' && status !== 'done') input.focus() } catch {} }, 60)
+  return cleanup
+}
+
+// 卡片工作目录内点文件：轻量只读预览，避免切换 pane 打乱卡片标签选中态
+export async function previewCardFile(filePath, name) {
+  let text = ''
+  try { text = await fsapi('readFile', { path: filePath }) } catch (e) { toast('读取失败：' + e.message, 'err'); return }
+  if (typeof text !== 'string') { toast('无法预览该文件', 'err'); return }
+  if (text.indexOf(String.fromCharCode(0)) !== -1) { toast('二进制文件暂不支持预览', 'err'); return }
+  const clipped = text.length > 200000 ? text.slice(0, 200000) + '\n…（内容过长，已截断）' : text
+  const isMd = /\.(md|markdown)$/i.test(name || '')
+  const body = isMd ? `<div class="md">${renderMarkdown(clipped)}</div>` : `<pre class="cardprev-pre">${esc(clipped)}</pre>`
+  const { mask, close } = showModal(`
+    <div class="mt">${esc(name || basename(filePath))}</div>
+    <div class="cardprev">${body}</div>
+    <div class="bfoot"><span class="sp"></span><button class="btn" data-act="close">关闭</button></div>`)
+  mask.querySelector('[data-act="close"]').addEventListener('click', close)
+  mask.addEventListener('mousedown', (e) => { if (e.target === mask) close() })
 }

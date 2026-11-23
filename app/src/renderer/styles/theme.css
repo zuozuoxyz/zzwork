@@ -275,8 +275,9 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
 #zzv .hidden { display: none !important }
 #zzv .sright { flex: 1; position: relative; min-height: 0; display: flex }
 #zzv .fmhost, #zzv .boardhost { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0 }
+/* 全屏时从标题栏下方开始：避免工具栏右侧按钮被原生窗口按钮（titleBarOverlay 顶部 30px）遮挡而点不到 */
 #zzv .fmhost.zz-fullscreen, #zzv .boardhost.zz-fullscreen {
-  position: fixed; inset: 0; z-index: 150; background: #141515; box-shadow: 0 0 0 1px var(--bd2) }
+  position: fixed; inset: 0; top: 30px; z-index: 150; background: #141515; box-shadow: 0 0 0 1px var(--bd2) }
 /* ---- 功能图 ---- */
 #zzv .fm-toolbar { display: flex; align-items: center; gap: 4px; padding: 5px 8px; border-bottom: 1px solid var(--bd); flex: 0 0 auto }
 #zzv .fm-toolbar .sp { flex: 1 }

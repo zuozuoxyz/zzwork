@@ -1,7 +1,7 @@
 // 全局状态与事件总线（渲染层内部）
 export const state = {
   view: 'projects',
-  mode: 'task',        // task | item | settings | board
+  mode: 'task',        // task | item | settings | board | card
   pane: 'info',
   lastTaskPane: 'info',  // 进入看板/设置/详情前的工作区 pane，离开时恢复
   taskId: null,
@@ -9,6 +9,8 @@ export const state = {
   fileTabs: [],        // [{ path, name, dirty }]
   activeFile: null,
   inboxOpen: false,    // 需求便签 tab 是否打开（唯一）
+  cardTabs: [],        // 看板卡片的对话标签 [{ id, name }]
+  cardActive: null,    // 当前激活的卡片标签 id（决定 #cardChat 挂载哪张卡）
   boardCards: [],      // 看板卡片（short 任务，scope==='board'）
   filter: '',
   collapsedGroups: new Set(),

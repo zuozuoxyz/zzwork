@@ -213,13 +213,14 @@ export default [
       // 卡片不应出现在项目树
       assert.equal(await app.call(() => [...document.querySelectorAll('.row[data-task]')].some((r) => r.textContent.includes('写周报'))), false, '看板卡片不应出现在项目树')
 
-      // 点击卡片修改标题与内容（卡片无按钮，整卡可点）
+      // 点击未开始卡片 → 直接打开编辑弹窗（未开始任务不打开 AI 对话标签）
       await app.call(() => {
         const card = [...document.querySelectorAll('.bcard')].find((e) => e.textContent.includes('写周报'))
         if (card) card.click()
         return true
       })
       await app.waitFor(() => !!document.querySelector('#bcTitle'), 5000, '编辑弹窗出现')
+      assert.equal(await app.exists('#tabbar .tab[data-pane="card"]'), false, '未开始卡片不打开对话标签')
       await app.setValue('#bcTitle', '写月报')
       await app.setValue('#bcContent', '汇总本月目标完成度')
       await app.click('.bmodal [data-act="save"]')
@@ -228,6 +229,8 @@ export default [
         const c = l.find((x) => x.id === ${JSON.stringify(card.id)})
         return !!(c && c.name === '写月报' && c.meta && c.meta.content.includes('本月目标'))
       })()`, 8000, '卡片编辑已保存')
+      // 仅保存后仍停留在看板，不打开对话标签
+      assert.equal(await app.exists('#tabbar .tab[data-pane="card"]'), false, '仅保存不打开对话标签')
     }
   },
   {
@@ -255,6 +258,81 @@ export default [
       assert.equal(c.scope, 'board', '新任务 scope 应为 board')
       assert.equal(c.status, 'todo', '新任务应为未开始')
       assert.ok(c.meta && String(c.meta.content).includes('弱网'), '任务详情应保存')
+    }
+  },
+  {
+    name: '打开卡片多开标签：左工作目录 + 右对话，可切换/关闭',
+    async run(app) {
+      // 复位：离开看板再回来，清空可能残留的卡片标签
+      await app.click('.abi[data-view="projects"]')
+      const a = await app.invoke('board', 'create', { title: '多开甲', content: '甲的内容' })
+      const b = await app.invoke('board', 'create', { title: '多开乙', content: '乙的内容' })
+      // 未开始卡片点击是「编辑」而非对话，置为待审核以便验证多开对话标签
+      await app.store('tasks.update', { id: a.id, patch: { status: 'review' } })
+      await app.store('tasks.update', { id: b.id, patch: { status: 'review' } })
+      await app.click('.abi[data-view="board"]')
+      await app.waitFor(() => !!document.querySelector('.boardcols'), 8000, '看板网格')
+      await app.waitFor(`!!document.querySelector('.bcard[data-card="${a.id}"]')`, 8000, '甲卡片渲染')
+      // 看板页面：左侧栏显示看板配置（模型/执行体），不显示工作目录树
+      assert.equal(await app.visible('#boardModelSel'), true, '看板页面左侧显示模型/执行体配置')
+      assert.equal(await app.visible('#boardSideFiles'), false, '看板页面不显示卡片工作目录树')
+      // 打开甲 → 生成卡片标签 + 左侧栏切换为工作目录树
+      await app.call((id) => { const e = document.querySelector(`.bcard[data-card="${id}"]`); if (e) e.click(); return true }, a.id)
+      await app.waitFor(() => !!document.querySelector('#tabbar .tab[data-card]'), 5000, '甲标签出现')
+      // 打开乙（看板 pane 已隐藏，但节点仍在，程序化点击仍触发）
+      await app.call((id) => { const e = document.querySelector(`.bcard[data-card="${id}"]`); if (e) e.click(); return true }, b.id)
+      await app.waitFor(`document.querySelectorAll('#tabbar .tab[data-pane="card"]').length === 2`, 5000, '两个卡片标签')
+      // 右侧对话区显示乙内容
+      await app.waitFor(`(() => { const m = document.querySelector('#bcMsgs'); return !!m && m.textContent.includes('乙的内容') })()`, 5000, '乙对话显示内容')
+      // 左侧栏切换为工作目录树：树存在、根名非空；看板配置隐藏
+      await app.waitFor(() => !!document.querySelector('#boardSideFiles .treebar'), 5000, '左侧栏工作目录树出现')
+      assert.equal(await app.visible('#boardModelSel'), false, '打开卡片后看板配置隐藏')
+      const rootName = await app.call(() => { const r = document.querySelector('#boardSideFiles .treebar .root'); return r ? r.textContent.trim() : '' })
+      assert.ok(rootName, '左侧工作目录根名非空')
+      // 回归：切到标签条「看板」→ 左侧栏应切回模型/执行体配置（而非停留工作目录树）
+      await app.call(() => { const t = document.querySelector('#tabbar .tab[data-pane="board"]'); if (t) t.click(); return true })
+      await app.waitFor(() => document.querySelector('#pane-board').classList.contains('on'), 5000, '切到看板 pane')
+      assert.equal(await app.visible('#boardModelSel'), true, '切回看板标签后左侧恢复配置')
+      assert.equal(await app.visible('#boardSideFiles'), false, '切回看板标签后隐藏工作目录树')
+      // 再点回卡片标签 → 左侧栏重新显示工作目录树
+      await app.call((id) => { const t = document.querySelector(`#tabbar .tab[data-card="${id}"]`); if (t) t.click(); return true }, b.id)
+      await app.waitFor(() => !!document.querySelector('#boardSideFiles .treebar'), 5000, '点回卡片后工作目录树重现')
+      assert.equal(await app.visible('#boardModelSel'), false, '点回卡片后配置隐藏')
+      // 切换到甲 → 对话区显示甲内容
+      await app.call((id) => { const t = document.querySelector(`#tabbar .tab[data-card="${id}"]`); if (t) t.click(); return true }, a.id)
+      await app.waitFor(`(() => { const m = document.querySelector('#bcMsgs'); return !!m && m.textContent.includes('甲的内容') })()`, 5000, '切回甲显示其内容')
+      // 关闭乙 → 剩一个标签
+      await app.call((id) => { const t = document.querySelector(`#tabbar .tab[data-card="${id}"] .x`); if (t) t.click(); return true }, b.id)
+      await app.waitFor(`document.querySelectorAll('#tabbar .tab[data-pane="card"]').length === 1`, 5000, '关闭乙后剩一个标签')
+      // 关闭最后一个 → 回看板
+      await app.call((id) => { const t = document.querySelector(`#tabbar .tab[data-card="${id}"] .x`); if (t) t.click(); return true }, a.id)
+      await app.waitFor(() => document.querySelector('#pane-board').classList.contains('on'), 5000, '关闭全部后回看板')
+      const left = await app.call(() => document.querySelectorAll('#tabbar .tab[data-pane="card"]').length)
+      assert.equal(left, 0, '不应残留卡片标签')
+      // 回到看板 → 左侧栏恢复看板配置
+      assert.equal(await app.visible('#boardModelSel'), true, '回到看板后左侧恢复模型/执行体配置')
+      assert.equal(await app.visible('#boardSideFiles'), false, '回到看板后隐藏工作目录树')
+    }
+  },
+  {
+    name: '已完成卡片只读：不可编辑、不可再和 AI 对话',
+    async run(app) {
+      const c = await app.invoke('board', 'create', { title: '已完成任务', content: '已经做完的事' })
+      await app.store('tasks.update', { id: c.id, patch: { status: 'done' } })
+      await app.click('.abi[data-view="projects"]')
+      await app.click('.abi[data-view="board"]')
+      await app.waitFor(() => !!document.querySelector('.boardcols'), 8000, '看板网格')
+      await app.waitFor(`!!document.querySelector('.bcol[data-col="done"] .bcard[data-card="${c.id}"]')`, 8000, '已完成卡片渲染')
+      await app.call((id) => { const e = document.querySelector(`.bcard[data-card="${id}"]`); if (e) e.click(); return true }, c.id)
+      await app.waitFor(() => { const p = document.querySelector('#pane-card'); return !!p && p.classList.contains('on') }, 5000, '卡片对话标签打开')
+      // 已完成：编辑按钮不可见、输入区不可见、状态显示已完成
+      assert.equal(await app.visible('[data-cardedit]'), false, '已完成卡片不显示编辑按钮')
+      assert.equal(await app.visible('#bcInWrap'), false, '已完成卡片不显示对话输入区')
+      const st = await app.text('#bcStatus')
+      assert.ok(st && st.includes('已完成'), '状态显示已完成：' + st)
+      // 关闭标签回看板，避免残留影响后续用例
+      await app.call((id) => { const t = document.querySelector(`#tabbar .tab[data-card="${id}"] .x`); if (t) t.click(); return true }, c.id)
+      await app.waitFor(() => document.querySelector('#pane-board').classList.contains('on'), 5000, '关闭后回看板')
     }
   },
   {

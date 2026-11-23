@@ -87,6 +87,8 @@
 #zzv .psplit-bar:hover, #zzv .psplit-bar:active { background: rgba(14,165,233,.25) }
 #zzv #filesTree { display: flex; flex-direction: column; overflow: hidden; padding: 2px 8px 4px }
 #zzv #filesTree .ftree { flex: 1; min-height: 0; max-height: none; overflow: auto }
+#zzv #boardSideFiles { display: flex; flex-direction: column; overflow: hidden; padding: 2px 8px 4px }
+#zzv #boardSideFiles .ftree { flex: 1; min-height: 0; max-height: none; overflow: auto }
 
 /* 会话头部：新建按钮 + 会话标签 */
 #zzv .ctop { row-gap: 5px; min-width: 0 }
@@ -331,6 +333,23 @@
 #zzv #pane-board { flex-direction: column }
 #zzv #pane-board.on { display: flex }
 #zzv .boardpane { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 12px 16px; box-sizing: border-box }
+
+/* 看板卡片的独立对话标签：对话占满编辑区，工作目录树显示在左侧系统侧栏 */
+#zzv #pane-card.on { display: flex; overflow: hidden }
+#zzv .cardwrap { display: flex; flex: 1; min-width: 0; min-height: 0 }
+#zzv .cardchat { flex: 1; min-width: 0; display: flex; flex-direction: column; padding: 10px 14px; box-sizing: border-box }
+#zzv .cardchat-h { display: flex; align-items: center; gap: 8px; margin-bottom: 2px }
+#zzv .cardchat-t { font-size: 13px; font-weight: 600; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+#zzv .cardchat-h .sp { flex: 1 }
+#zzv #pane-card .bchat { max-height: none; flex: 1; min-height: 0; margin: 8px 0 }
+#zzv .cardbrief { font-size: 13px; line-height: 1.65; color: var(--fg) }
+#zzv .cardbrief-l { font-size: 11px; color: var(--faint); margin-bottom: 4px }
+#zzv .cardbrief :is(p,h1,h2,h3,ul,ol,pre) { margin: 6px 0 }
+#zzv .carddiff { align-self: stretch; min-width: 0; max-width: 100% }
+#zzv .carddiff .diffbox { max-width: 100%; box-sizing: border-box }
+#zzv .bstartwrap { margin: 14px 0 4px }
+#zzv .cardprev { margin: 4px 0 10px; max-height: 64vh; overflow: auto }
+#zzv .cardprev-pre { white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.6; margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace }
 #zzv .boardcols { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px }
 #zzv .bcol { display: flex; flex-direction: column; min-width: 0; background: var(--card2);
   border: 1px solid var(--bd); border-radius: 9px; overflow: hidden }

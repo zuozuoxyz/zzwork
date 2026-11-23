@@ -8,7 +8,7 @@ const FIXED = [
   { pane: 'ai', icon: 'message-square', label: 'AI 对话' }
 ]
 
-const PANES = ['info', 'inbox', 'session', 'ai', 'file', 'item', 'settings', 'board']
+const PANES = ['info', 'inbox', 'session', 'ai', 'file', 'item', 'settings', 'board', 'card']
 
 export function showPane(name) {
   state.pane = name
@@ -18,6 +18,11 @@ export function showPane(name) {
   }
   const bar = $('#tabbar')
   bar.querySelectorAll('.tab').forEach((t) => {
+    // 卡片的多个 tab 共享 data-pane="card"，只有当前激活卡片高亮
+    if (t.hasAttribute('data-card')) {
+      t.classList.toggle('on', name === 'card' && t.getAttribute('data-card') === state.cardActive)
+      return
+    }
     t.classList.toggle('on', t.getAttribute('data-pane') === name && !t.hasAttribute('data-file'))
   })
   const activeFileTab = bar.querySelector(`.tab[data-file="${cssEsc(state.activeFile || '')}"]`)
@@ -50,6 +55,17 @@ export function renderTabs() {
     refreshIcons()
     return
   }
+  if (state.mode === 'card') {
+    const parts = [`<div class="tab${state.pane === 'board' ? ' on' : ''}" data-pane="board">${ic('kanban-square', 12)}<span>看板</span></div>`]
+    for (const c of state.cardTabs) {
+      const on = state.pane === 'card' && state.cardActive === c.id ? ' on' : ''
+      parts.push(`<div class="tab${on}" data-pane="card" data-card="${esc(c.id)}" title="${esc(c.name)}">${ic('message-square', 12)}<span>${esc(c.name)}</span><span class="x" title="关闭">×</span></div>`)
+    }
+    bar.innerHTML = parts.join('')
+    refreshIcons()
+    bindTabClicks(bar)
+    return
+  }
 
   const parts = []
   if (!state.taskId) {
@@ -80,12 +96,15 @@ function bindTabClicks(bar) {
   bar.querySelectorAll('.tab').forEach((t) => {
     t.addEventListener('click', (e) => {
       const pane = t.getAttribute('data-pane')
+      const cardId = t.getAttribute('data-card')
       if (e.target.classList.contains('x')) {
         e.stopPropagation()
         if (pane === 'inbox') emit('close-inbox')
+        else if (pane === 'card') emit('card-close', cardId)
         else emit('file-close', t.getAttribute('data-file'))
         return
       }
+      if (pane === 'card') { emit('card-activate', cardId); return }
       if (pane === 'file') emit('file-activate', t.getAttribute('data-file'))
       else showPane(pane)
     })

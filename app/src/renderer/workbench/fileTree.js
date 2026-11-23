@@ -57,34 +57,37 @@ async function moveEntry(destDir, container) {
   try { await fsapi('rename', { from: src.path, to: target }) } catch (e) { toast('移动失败：' + e.message, 'err', 4000); return }
   remapExpanded(src.path, target)
   await closeTabsUnder(src.path)
-  await renderFileTree(container)
+  await renderFileTree(container, container.__ftOpts)
 }
 
-export async function renderFileTree(container) {
-  const task = activeTask()
-  if (!task) {
+export async function renderFileTree(container, opts = {}) {
+  // 记住本次渲染选项，供内部新建/重命名/删除/移动后的重渲染复用（侧栏树不带 opts，回退到 activeTask）
+  container.__ftOpts = opts
+  const task = opts.task || activeTask()
+  const root = opts.root || (task && task.path)
+  if (!root) {
     lastTaskPath = ''
     container.innerHTML = `<div class="empty" style="padding:10px 8px;font-size:11px">选择任务后显示文件</div>`
     return
   }
   // 同一任务重渲染（刷新/新建/重命名）保留滚动位置；切任务归零
-  const prevScroll = (task.path === lastTaskPath && container.querySelector('#ftreeBody')?.scrollTop) || 0
-  lastTaskPath = task.path
+  const prevScroll = (root === lastTaskPath && container.querySelector('#ftreeBody')?.scrollTop) || 0
+  lastTaskPath = root
   container.innerHTML = `
     <div class="treebar">
       <button class="ib" id="ftNewFile" title="新建文件"><i data-lucide="file-plus" style="width:13px;height:13px"></i></button>
       <button class="ib" id="ftNewDir" title="新建文件夹"><i data-lucide="folder-plus" style="width:13px;height:13px"></i></button>
       <button class="ib" id="ftRefresh" title="刷新"><i data-lucide="rotate-cw" style="width:12px;height:12px"></i></button>
       <button class="ib" id="ftReveal" title="在资源管理器中显示"><i data-lucide="external-link" style="width:12px;height:12px"></i></button>
-      <span class="root">${esc(basename(task.path))}</span>
+      <span class="root">${esc(basename(root))}</span>
     </div>
     <div class="ftree" id="ftreeBody"></div>`
   refreshIcons()
 
-  container.querySelector('#ftNewFile').addEventListener('click', () => newEntry(task.path, false, container))
-  container.querySelector('#ftNewDir').addEventListener('click', () => newEntry(task.path, true, container))
-  container.querySelector('#ftRefresh').addEventListener('click', () => renderFileTree(container))
-  container.querySelector('#ftReveal').addEventListener('click', () => fsapi('reveal', { path: task.path }).catch((e) => toast(e.message, 'err')))
+  container.querySelector('#ftNewFile').addEventListener('click', () => newEntry(root, false, container))
+  container.querySelector('#ftNewDir').addEventListener('click', () => newEntry(root, true, container))
+  container.querySelector('#ftRefresh').addEventListener('click', () => renderFileTree(container, container.__ftOpts))
+  container.querySelector('#ftReveal').addEventListener('click', () => fsapi('reveal', { path: root }).catch((e) => toast(e.message, 'err')))
 
   const body = container.querySelector('#ftreeBody')
   body.addEventListener('contextmenu', (e) => {
@@ -92,18 +95,18 @@ export async function renderFileTree(container) {
     e.preventDefault()
     e.stopPropagation()
     showContextMenu(e.clientX, e.clientY, [
-      { label: '新建文件', icon: 'file-plus', action: () => newEntry(task.path, false, container) },
-      { label: '新建文件夹', icon: 'folder-plus', action: () => newEntry(task.path, true, container) },
+      { label: '新建文件', icon: 'file-plus', action: () => newEntry(root, false, container) },
+      { label: '新建文件夹', icon: 'folder-plus', action: () => newEntry(root, true, container) },
       { sep: true },
-      { label: '刷新', icon: 'rotate-cw', action: () => renderFileTree(container) },
-      { label: '在资源管理器中显示', icon: 'external-link', action: () => fsapi('reveal', { path: task.path }).catch((err) => toast(err.message, 'err')) }
+      { label: '刷新', icon: 'rotate-cw', action: () => renderFileTree(container, container.__ftOpts) },
+      { label: '在资源管理器中显示', icon: 'external-link', action: () => fsapi('reveal', { path: root }).catch((err) => toast(err.message, 'err')) }
     ])
   })
 
   // 拖到树空白处 = 移到任务根目录
   body.addEventListener('dragover', (e) => {
     if (!dragFile || e.target.closest('.fr')) return
-    if (!validDrop(task.path)) return
+    if (!validDrop(root)) return
     e.preventDefault()
     try { e.dataTransfer.dropEffect = 'move' } catch {}
     body.classList.add('drop-root')
@@ -115,20 +118,20 @@ export async function renderFileTree(container) {
     if (e.target.closest('.fr')) return
     e.preventDefault()
     body.classList.remove('drop-root')
-    await moveEntry(task.path, container)
+    await moveEntry(root, container)
   })
 
-  await rebuild(container, task)
+  await rebuild(container, root)
   const nb = container.querySelector('#ftreeBody')
   if (nb && prevScroll) nb.scrollTop = prevScroll
 }
 
-async function rebuild(container, task) {
+async function rebuild(container, root) {
   const body = container.querySelector('#ftreeBody')
   if (!body) return
   const scroll = body.scrollTop
   body.innerHTML = ''
-  await buildTree(body, container, task, task.path, 0)
+  await buildTree(body, container, root, 0)
   body.scrollTop = scroll
   refreshIcons()
   markActive(container)
@@ -140,7 +143,7 @@ function markActive(container) {
   }
 }
 
-async function buildTree(body, host, task, dirPath, depth, after) {
+async function buildTree(body, host, dirPath, depth, after) {
   let list = []
   try { list = await fsapi('readDir', { path: dirPath }) } catch (e) {
     const div = document.createElement('div')
@@ -218,8 +221,9 @@ async function buildTree(body, host, task, dirPath, depth, after) {
           removeDescendants(body, it.path)
         }
       } else {
-        await openFile(it.path, it.name)
-        markActive(host)
+        const ftOpts = host.__ftOpts || {}
+        if (ftOpts.onOpenFile) await ftOpts.onOpenFile(it.path, it.name)
+        else { await openFile(it.path, it.name); markActive(host) }
       }
     })
     row.addEventListener('contextmenu', (e) => {
@@ -234,7 +238,7 @@ async function buildTree(body, host, task, dirPath, depth, after) {
       showContextMenu(e.clientX, e.clientY, items)
     })
 
-    if (it.dir && isOpen) last = (await buildTree(body, host, task, it.path, depth + 1, last)) || last
+    if (it.dir && isOpen) last = (await buildTree(body, host, it.path, depth + 1, last)) || last
   }
   return last
 }
@@ -275,8 +279,12 @@ async function newEntry(dirPath, isDir, container) {
     else await fsapi('writeFile', { path: target, content: '' })
   } catch (e) { toast('创建失败：' + e.message, 'err', 4000); return }
   if (dirPath) expanded.add(dirPath)
-  await renderFileTree(container)
-  if (!isDir) openFile(target, name)
+  await renderFileTree(container, container.__ftOpts)
+  if (!isDir) {
+    const ftOpts = container.__ftOpts || {}
+    if (ftOpts.onOpenFile) ftOpts.onOpenFile(target, name)
+    else openFile(target, name)
+  }
 }
 
 async function renameEntry(it, container) {
@@ -286,7 +294,7 @@ async function renameEntry(it, container) {
   try { await fsapi('rename', { from: it.path, to: target }) } catch (e) { toast('重命名失败：' + e.message, 'err', 4000); return }
   if (expanded.has(it.path)) { expanded.delete(it.path); expanded.add(target) }
   if (state.activeFile === it.path) { try { await closeFile(it.path) } catch {} }
-  await renderFileTree(container)
+  await renderFileTree(container, container.__ftOpts)
 }
 
 async function deleteEntry(it, container) {
@@ -297,7 +305,7 @@ async function deleteEntry(it, container) {
   if (!ok) return
   if (state.activeFile === it.path) { try { await closeFile(it.path) } catch {} }
   try { await fsapi('delete', { path: it.path }) } catch (e) { toast('删除失败：' + e.message, 'err', 4000); return }
-  await renderFileTree(container)
+  await renderFileTree(container, container.__ftOpts)
   toast('已删除 ' + it.name)
 }
 
