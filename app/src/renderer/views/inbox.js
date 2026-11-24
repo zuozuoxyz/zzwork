@@ -1,5 +1,5 @@
 // 需求便签：工作区顶层记录 + 归类（新建/归入任务）+ 一键执行
-import { invoke, store } from '../lib/api.js'
+import { invoke, store, onChatEvent } from '../lib/api.js'
 import { state, emit } from '../lib/state.js'
 import { $, esc, ic, taskIcon, debounce, refreshIcons } from '../lib/ui.js'
 import { reloadTasks } from '../lib/data.js'
@@ -9,8 +9,11 @@ let loaded = false
 let busy = false
 // 归类审阅进行中：{ base: 原始便签内容, confirmed: 已确认应用的行文本[] }
 let review = null
-// 拖拽改状态：{ id, type, scope, status }
+// 拖拽改状态：{ id, type, scope, status, col }
 let inboxDrag = null
+// 手动排序：各未完成分区（todo/open/code）的卡片 id 顺序，持久化到 settings
+let orderMap = { todo: [], open: [], code: [] }
+const REORDER_COLS = new Set(['todo', 'open', 'code'])
 // 分栏比例（相对容器）：左右宽、左上高
 let leftRatio = 0.46
 let topRatio = 0.56
@@ -36,8 +39,80 @@ export function initInboxView() {
   })
   initInboxSplit()
   loadInboxRatios().catch(() => {})
+  ensureOrder()
   loadInbox()
+  // 有任务 AI 回复结束/发起提问时实时刷新未读与待回答标志（仅当正停留在便签页）
+  onChatEvent((ev) => {
+    if (!ev) return
+    if (ev.type !== 'unread' && ev.type !== 'ask' && ev.type !== 'done') return
+    if (state.pane !== 'inbox') return
+    renderInboxBoard().then(() => renderInboxCode()).catch(() => {})
+  })
 }
+
+let orderPromise = null
+function ensureOrder() {
+  if (!orderPromise) orderPromise = loadInboxOrder().catch(() => {})
+  return orderPromise
+}
+
+async function loadInboxOrder() {
+  try {
+    const raw = await store('settings.get', { key: 'ui:inboxOrder', dflt: '' })
+    if (raw) {
+      const o = JSON.parse(raw)
+      if (o && typeof o === 'object') {
+        orderMap = { todo: [], open: [], code: [], ...o }
+        return
+      }
+    }
+  } catch {}
+}
+
+async function persistColOrder(col, ids) {
+  orderMap[col] = ids
+  try { await store('settings.set', { key: 'ui:inboxOrder', value: JSON.stringify(orderMap) }) } catch {}
+}
+
+// 按已保存顺序排列；未登记的任务保持自然顺序排在后面
+function applyOrder(list, col) {
+  const arr = orderMap[col]
+  if (!arr || !arr.length) return list
+  const rank = new Map(arr.map((id, i) => [id, i]))
+  return list.slice().sort((a, b) => {
+    const ra = rank.has(a.id) ? rank.get(a.id) : Infinity
+    const rb = rank.has(b.id) ? rank.get(b.id) : Infinity
+    return ra === rb ? 0 : ra - rb
+  })
+}
+
+// 未读：主进程记录的最近一次 AI 回复结束时间晚于用户已读时间
+let replyAt = {}, readAt = {}
+async function refreshUnreadMaps() {
+  try {
+    const r = await store('settings.get', { key: 'ui:taskReplyAt', dflt: '' })
+    replyAt = r ? (JSON.parse(r) || {}) : {}
+  } catch { replyAt = {} }
+  try {
+    const d = await store('settings.get', { key: 'ui:taskRead', dflt: '' })
+    readAt = d ? (JSON.parse(d) || {}) : {}
+  } catch { readAt = {} }
+}
+const isUnread = (id) => (replyAt[id] || 0) > (readAt[id] || 0)
+
+// 正在等待用户回答（AskUserQuestion 工具阻塞）的任务
+let awaitingSet = new Set()
+async function refreshAwaiting() {
+  try {
+    const list = await invoke('chat', 'awaiting')
+    awaitingSet = new Set(Array.isArray(list) ? list : [])
+  } catch { awaitingSet = new Set() }
+}
+const isAwaiting = (id) => awaitingSet.has(id)
+// 有未回答的提问时优先显示「待回答」；否则显示未读
+const unreadBadge = (id) => isAwaiting(id)
+  ? '<span class="ibunread ask" title="正在等待你的回答">待回答</span>'
+  : isUnread(id) ? '<span class="ibunread" title="有未读的 AI 回复">未读</span>' : ''
 
 // —— 分栏拖拽：左右宽（水平分隔条）+ 左上高（垂直分隔条），比例持久化 ——
 function applyInboxRatios() {
@@ -140,23 +215,30 @@ function removeConfirmedLines(content, confirmedTexts) {
   }).join('\n')
 }
 
-// 需求便签右栏：全部任务两栏总览（未完成 / 已完成）—— 只含 work 与看板任务
+// 需求便签右栏：全部任务三栏总览（未开始 / 未完成 / 已完成）—— 只含 work 与看板任务
 export async function renderInboxBoard() {
   const el = $('#inboxBoard')
   if (!el) return
   try { await reloadTasks() } catch {}
+  await ensureOrder()
+  await refreshUnreadMaps()
+  await refreshAwaiting()
   const tasks = state.tasks.filter((t) => t.scope === 'board' || t.type === 'work')
   const done = tasks.filter((t) => t.status === 'done')
-  const open = tasks.filter((t) => t.status !== 'done')
+  const todo = applyOrder(tasks.filter((t) => t.status === 'todo'), 'todo')
+  const open = applyOrder(tasks.filter((t) => t.status !== 'done' && t.status !== 'todo'), 'open')
   const card = (t) => {
     const isBoard = t.scope === 'board'
     const [name, color] = isBoard ? ['kanban-square', '#a074c4'] : ['notebook', '#2dd4bf']
     return `<div class="ibcard ${isBoard ? 'board' : 'work'}" data-task="${esc(t.id)}" draggable="true">
       <span class="ibic" style="color:${color}">${ic(name, 13)}</span>
       <span class="ibn">${esc(t.name)}</span>
+      ${unreadBadge(t.id)}
       <span class="ibp">${isBoard ? '短期' : 'work'}</span></div>`
   }
   el.innerHTML = `
+    <div class="ibcol"><div class="ibcolh">未开始 <span class="bn">${todo.length}</span></div>
+      <div class="ibcolb" data-col="todo">${todo.map(card).join('') || '<div class="hint">没有未开始任务</div>'}</div></div>
     <div class="ibcol"><div class="ibcolh">未完成 <span class="bn">${open.length}</span></div>
       <div class="ibcolb" data-col="open">${open.map(card).join('') || '<div class="hint">没有未完成任务</div>'}</div></div>
     <div class="ibcol"><div class="ibcolh">已完成 <span class="bn">${done.length}</span></div>
@@ -170,19 +252,21 @@ export async function renderInboxBoard() {
 export function renderInboxCode() {
   const el = $('#inboxCodeTasks')
   if (!el) return
-  const codes = state.tasks.filter((t) => t.type === 'code')
+  const codes = applyOrder(state.tasks.filter((t) => t.type === 'code'), 'code')
   const ti = taskIcon('code')
   const card = (t) => {
     const done = t.status === 'done'
     return `<div class="ibcard code${done ? ' done' : ''}" data-task="${esc(t.id)}" draggable="${done ? 'false' : 'true'}" title="${esc(t.path || '')}">
       <span class="ibic" style="color:${ti.color}">${ic(ti.name, 13)}</span>
       <span class="ibn">${esc(t.name)}</span>
+      ${unreadBadge(t.id)}
       ${done ? '<span class="ibdone">已完成</span>' : '<span class="ibp">code</span>'}</div>`
   }
   const cnt = $('#codeCount')
   if (cnt) cnt.textContent = codes.length ? codes.length + ' 个' : ''
   el.innerHTML = codes.length ? codes.map(card).join('') : '<div class="hint" style="padding:8px 2px">暂无代码任务</div>'
   wireInboxCards(el)
+  attachCodeReorder(el)
   refreshIcons()
 }
 
@@ -190,38 +274,123 @@ export function renderInboxCode() {
 function wireInboxCards(el) {
   el.querySelectorAll('.ibcard[data-task]').forEach((c) => {
     const id = c.getAttribute('data-task')
-    c.addEventListener('click', () => emit('select-task', id))
+    c.addEventListener('click', () => {
+      const t = state.tasks.find((x) => x.id === id)
+      // 看板任务跳到看板页并打开该卡片，而非落到常规任务信息页
+      if (t && t.scope === 'board') { emit('open-card-tab', { card: t }); return }
+      emit('select-task', id)
+    })
     if (c.getAttribute('draggable') === 'false') return
     c.addEventListener('dragstart', (e) => {
       const t = state.tasks.find((x) => x.id === id)
       if (!t) return
-      inboxDrag = { id, type: t.type, scope: t.scope, status: t.status }
+      const colEl = c.closest('.ibcolb')
+      const col = colEl ? colEl.getAttribute('data-col') : 'code'
+      inboxDrag = { id, type: t.type, scope: t.scope, status: t.status, col }
       try { e.dataTransfer.effectAllowed = 'move' } catch {}
       try { e.dataTransfer.setData('text/plain', id) } catch {}
       c.classList.add('dragging')
     })
-    c.addEventListener('dragend', () => { c.classList.remove('dragging'); inboxDrag = null })
+    c.addEventListener('dragend', () => { c.classList.remove('dragging'); clearDropMarks(); inboxDrag = null })
   })
 }
 
-// 右栏「未完成/已完成」列作为放置目标
+// —— 同列拖拽排序 ——
+function clearDropMarks() {
+  document.querySelectorAll('#pane-inbox .ibcard.drop-before').forEach((c) => c.classList.remove('drop-before'))
+  document.querySelectorAll('#pane-inbox .drop-end').forEach((c) => c.classList.remove('drop-end'))
+  document.querySelectorAll('#pane-inbox .ibcolb.drop-on').forEach((c) => c.classList.remove('drop-on'))
+}
+
+function reorderCards(container) {
+  return [...container.querySelectorAll('.ibcard[data-task]')].filter((c) => !c.classList.contains('dragging'))
+}
+
+// 依据指针 y 求插入目标：返回应被「挤下去」的卡片 id，null=追加到末尾
+function reorderTargetId(container, y) {
+  for (const c of reorderCards(container)) {
+    const r = c.getBoundingClientRect()
+    if (y < r.top + r.height / 2) return c.getAttribute('data-task')
+  }
+  return null
+}
+
+function markInsert(container, y) {
+  clearDropMarks()
+  const tid = reorderTargetId(container, y)
+  if (tid) {
+    const target = reorderCards(container).find((c) => c.getAttribute('data-task') === tid)
+    if (target) target.classList.add('drop-before')
+  } else {
+    container.classList.add('drop-end')
+  }
+}
+
+function computeReordered(container, movingId, y) {
+  const ids = [...container.querySelectorAll('.ibcard[data-task]')]
+    .map((c) => c.getAttribute('data-task')).filter((id) => id !== movingId)
+  const tid = reorderTargetId(container, y)
+  let idx = ids.length
+  if (tid) { const i = ids.indexOf(tid); if (i >= 0) idx = i }
+  ids.splice(idx, 0, movingId)
+  return ids
+}
+
+// 代码任务单一列表内拖拽排序
+function attachCodeReorder(el) {
+  el.addEventListener('dragover', (e) => {
+    if (!inboxDrag || inboxDrag.col !== 'code') return
+    e.preventDefault()
+    try { e.dataTransfer.dropEffect = 'move' } catch {}
+    markInsert(el, e.clientY)
+  })
+  el.addEventListener('drop', async (e) => {
+    if (!inboxDrag || inboxDrag.col !== 'code') return
+    e.preventDefault()
+    const ids = computeReordered(el, inboxDrag.id, e.clientY)
+    inboxDrag = null
+    clearDropMarks()
+    await persistColOrder('code', ids)
+    renderInboxCode()
+  })
+}
+
+// 右栏「未开始/未完成/已完成」列作为放置目标：同列=拖拽排序，跨列=改状态
 function attachColumnDrop(b) {
   const col = b.getAttribute('data-col')
-  const valid = () => {
+  const sameColReorder = () => inboxDrag && inboxDrag.col === col && REORDER_COLS.has(col)
+  const validCross = () => {
     if (!inboxDrag) return false
+    if (inboxDrag.col === col) return false // 同列走排序分支
     if (inboxDrag.type === 'code' && col !== 'done') return false // code 任务只能落到已完成
-    const cur = inboxDrag.status === 'done' ? 'done' : 'open'
-    return col !== cur // 同列无需移动
+    if (col === 'todo' && inboxDrag.scope !== 'board') return false // 仅看板任务有「未开始」
+    const cur = inboxDrag.status === 'done' ? 'done' : inboxDrag.status === 'todo' ? 'todo' : 'open'
+    return col !== cur
   }
   b.addEventListener('dragover', (e) => {
-    if (!valid()) return
+    if (sameColReorder()) {
+      e.preventDefault()
+      try { e.dataTransfer.dropEffect = 'move' } catch {}
+      markInsert(b, e.clientY)
+      return
+    }
+    if (!validCross()) return
     e.preventDefault()
     try { e.dataTransfer.dropEffect = 'move' } catch {}
     b.classList.add('drop-on')
   })
   b.addEventListener('dragleave', (e) => { if (e.target === b) b.classList.remove('drop-on') })
   b.addEventListener('drop', async (e) => {
-    if (!valid()) return
+    if (sameColReorder()) {
+      e.preventDefault()
+      const ids = computeReordered(b, inboxDrag.id, e.clientY)
+      inboxDrag = null
+      clearDropMarks()
+      await persistColOrder(col, ids)
+      renderInboxBoard()
+      return
+    }
+    if (!validCross()) return
     e.preventDefault()
     b.classList.remove('drop-on')
     const src = inboxDrag
@@ -232,16 +401,18 @@ function attachColumnDrop(b) {
 
 async function dropToColumn(src, col) {
   if (!src) return
-  const cur = src.status === 'done' ? 'done' : 'open'
+  const cur = src.status === 'done' ? 'done' : src.status === 'todo' ? 'todo' : 'open'
   if (col === cur) return
-  const status = col === 'done' ? 'done' : (src.scope === 'board' ? 'todo' : 'active')
+  const status = col === 'done' ? 'done'
+    : col === 'todo' ? 'todo'
+    : (src.scope === 'board' ? 'review' : 'active')
   try {
     await store('tasks.update', { id: src.id, patch: { status } })
     await reloadTasks()
     emit('tasks-changed')
     renderInboxBoard()
     renderInboxCode()
-    toast(status === 'done' ? '已标记完成' : '已恢复到未完成')
+    toast(col === 'done' ? '已标记完成' : col === 'todo' ? '已移至未开始' : '已恢复到未完成')
   } catch (e) {
     toast('更新失败：' + e.message, 'err', 4000)
   }
@@ -296,41 +467,50 @@ function setTriageButton(mode) {
   btn.classList.toggle('cancelling', mode === 'cancel')
 }
 
+// 分组下拉选项：与新建任务弹框一致（不分组 + 各组路径）
+function groupOptionsHTML() {
+  const groupById = new Map(state.groups.map((g) => [g.id, g]))
+  const label = (g) => {
+    const parts = []
+    let cur = g, guard = 0
+    while (cur && guard++ < 50) { parts.unshift(cur.name); cur = cur.parent_id ? groupById.get(cur.parent_id) : null }
+    return parts.join(' / ')
+  }
+  const opts = [['', '（不分组）'], ...state.groups.map((g) => [g.id, label(g)])]
+  return opts.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')
+}
+
 // 用内联审阅面板就地替换输入框，逐条确认
 function enterReview(items, baseContent) {
   const input = $('#inboxInput')
   const panel = $('#inboxReview')
   if (!input || !panel) return
   review = { base: baseContent, confirmed: [] }
+  const groupOpts = groupOptionsHTML()
   const rows = items.map((it, i) => {
-    const action = it.action === 'attach' ? 'attach' : it.action === 'ignore' ? 'ignore' : 'new'
-    const taskOpts = state.tasks.filter((t) => t.scope !== 'board')
-      .map((t) => `<option value="${esc(t.id)}" ${t.id === it.taskId ? 'selected' : ''}>${esc(t.name)}</option>`).join('')
+    const action = it.action === 'ignore' ? 'ignore' : 'new'
+    const kind = it.kind === 'board' ? 'board' : 'task'
+    const isNew = action === 'new'
     return `<div class="ir-row" data-i="${i}" data-text="${esc(it.text)}">
       <div class="ir-text">${esc(it.text)}</div>
       <div class="ir-ctrl">
         <select class="ir-act">
-          <option value="new" ${action === 'new' ? 'selected' : ''}>新建任务</option>
-          <option value="attach" ${action === 'attach' ? 'selected' : ''}>归入任务</option>
-          <option value="ignore" ${action === 'ignore' ? 'selected' : ''}>忽略</option>
+          <option value="new" ${isNew ? 'selected' : ''}>新建任务</option>
+          <option value="ignore" ${action === 'ignore' ? 'selected' : ''}>忽略（已有相关任务）</option>
         </select>
-        <input class="ir-name" value="${esc(it.name || it.text.slice(0, 40))}" placeholder="新任务名" ${action === 'new' ? '' : 'style="display:none"'}>
-        <select class="ir-task" ${action === 'attach' ? '' : 'style="display:none"'}>${taskOpts || '<option value="">（暂无任务）</option>'}</select>
-        <select class="ir-scope" ${action === 'new' ? '' : 'style="display:none"'}>
-          <option value="long" ${it.scope === 'short' ? '' : 'selected'}>中长期</option>
-          <option value="short" ${it.scope === 'short' ? 'selected' : ''}>短期看板</option>
+        <input class="ir-name" value="${esc(it.name || it.text.slice(0, 40))}" placeholder="新任务名" ${isNew ? '' : 'style="display:none"'}>
+        <select class="ir-kind" ${isNew ? '' : 'style="display:none"'}>
+          <option value="task" ${kind === 'task' ? 'selected' : ''}>短期任务</option>
+          <option value="board" ${kind === 'board' ? 'selected' : ''}>看板任务</option>
         </select>
-        <select class="ir-type" ${action === 'ignore' ? 'style="display:none"' : ''}>
-          <option value="work" ${it.type === 'code' ? '' : 'selected'}>work</option>
-          <option value="code" ${it.type === 'code' ? 'selected' : ''}>code</option>
-        </select>
-        <button class="btn sm pri ir-confirm">${action === 'ignore' ? '保留' : '确认'}</button>
+        <select class="ir-group" ${isNew && kind === 'task' ? '' : 'style="display:none"'}>${groupOpts}</select>
+        <button class="btn sm pri ir-confirm">${action === 'ignore' ? '忽略' : '确认'}</button>
       </div>
       <div class="ir-reason"><span>${esc(it.reason || '')}</span><span>置信度 ${Math.round((Number(it.confidence) || 0) * 100)}%</span></div>
     </div>`
   }).join('')
   panel.innerHTML = `
-    <div class="ir-head">归类结果 · 逐条确认（确认后该行从便签移除；右上角「取消」保留未确认内容）</div>
+    <div class="ir-head">归类结果 · 新建任务（看板 / 短期）或忽略（已有相关任务）；确认后该行从便签移除</div>
     <div class="ir-rows">${rows}</div>
     <div class="ir-foot">
       <label class="mf inline" style="margin:0"><input type="checkbox" id="ir-exec" checked> 立即执行</label>
@@ -348,26 +528,19 @@ function enterReview(items, baseContent) {
 function wireReviewRow(row) {
   const act = row.querySelector('.ir-act')
   const name = row.querySelector('.ir-name')
-  const task = row.querySelector('.ir-task')
-  const scope = row.querySelector('.ir-scope')
-  const type = row.querySelector('.ir-type')
+  const kind = row.querySelector('.ir-kind')
+  const group = row.querySelector('.ir-group')
   const cbtn = row.querySelector('.ir-confirm')
-  act.addEventListener('change', () => {
-    const v = act.value
-    name.style.display = v === 'new' ? '' : 'none'
-    task.style.display = v === 'attach' ? '' : 'none'
-    scope.style.display = v === 'new' ? '' : 'none'
-    type.style.display = v === 'ignore' ? 'none' : ''
-    if (cbtn) cbtn.textContent = v === 'ignore' ? '保留' : '确认'
-    if (v === 'attach' && !task.value) {
-      const first = state.tasks.find((t) => t.scope !== 'board')
-      if (first) task.value = first.id
-    }
-  })
-  if (act.value === 'attach' && !task.value) {
-    const first = state.tasks.find((t) => t.scope !== 'board')
-    if (first) task.value = first.id
+  const sync = () => {
+    const isNew = act.value === 'new'
+    name.style.display = isNew ? '' : 'none'
+    kind.style.display = isNew ? '' : 'none'
+    group.style.display = (isNew && kind.value === 'task') ? '' : 'none'
+    if (cbtn) cbtn.textContent = act.value === 'ignore' ? '忽略' : '确认'
   }
+  act.addEventListener('change', sync)
+  kind.addEventListener('change', sync)
+  sync()
   cbtn.addEventListener('click', () => confirmReviewRow(row))
 }
 
@@ -375,22 +548,20 @@ function reviewRowItem(row) {
   const action = row.querySelector('.ir-act').value
   const text = row.getAttribute('data-text')
   if (action === 'ignore') return { ignore: true, text }
-  if (action === 'attach') {
-    const taskId = row.querySelector('.ir-task').value
-    if (!taskId) return { error: '请选择目标任务' }
-    const t = state.tasks.find((x) => x.id === taskId)
-    return { action: 'attach', text, taskId, taskName: t ? t.name : '' }
-  }
   const name = row.querySelector('.ir-name').value.trim() || text.slice(0, 40)
-  const type = row.querySelector('.ir-type').value
-  const scope = row.querySelector('.ir-scope').value === 'short' ? 'short' : 'long'
-  return { action: 'new', text, name, type, scope }
+  const kind = row.querySelector('.ir-kind').value === 'board' ? 'board' : 'task'
+  const groupId = kind === 'task' ? row.querySelector('.ir-group').value : ''
+  return { action: 'new', text, name, kind, groupId }
 }
 
 async function confirmReviewRow(row) {
   const it = reviewRowItem(row)
   if (it.error) { toast(it.error); return }
-  if (it.ignore) { row.remove(); updateReviewCount(); maybeFinishReview(); return }
+  if (it.ignore) {
+    // 忽略（已有相关任务）：不新建、不执行，仅将已处理的行从便签移除
+    review.confirmed.push(it.text)
+    row.remove(); updateReviewCount(); maybeFinishReview(); return
+  }
   const cbtn = row.querySelector('.ir-confirm')
   if (cbtn) cbtn.disabled = true
   const execute = $('#ir-exec') ? $('#ir-exec').checked : true

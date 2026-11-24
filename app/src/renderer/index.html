@@ -46,6 +46,7 @@
       </div>
       <div style="flex:1"></div>
       <button class="ib upd" id="updateBtn" hidden title="发现新版本"><i data-lucide="circle-arrow-up" style="width:14px;height:14px"></i></button>
+      <button class="ib ib-entry" id="openInboxBtn" title="需求便签 · 记录并归类需求"><i data-lucide="sticky-note" style="width:14px;height:14px"></i><span>需求便签</span></button>
       <button class="ib" id="termToggle" title="终端 (Ctrl+`)"><i data-lucide="square-terminal" style="width:14px;height:14px"></i></button>
     </div>
 
@@ -71,13 +72,6 @@
           </div>
           <div class="psplit" id="projectsSplit">
             <div class="pspane" id="projectsTop">
-              <div class="inbox" id="inboxWrap">
-                <button class="inbox-entry" id="openInboxBtn" title="打开需求便签">
-                  <i data-lucide="sticky-note" style="width:13px;height:13px"></i>
-                  <span class="t">需求便签</span>
-                  <span class="hint">点击打开</span>
-                </button>
-              </div>
               <div class="pbody" id="projectsBody"></div>
             </div>
             <div class="psplit-bar" id="projectsSplitBar" title="拖动调整"></div>
@@ -171,7 +165,7 @@
               <div class="inboxbar">
                 <i data-lucide="layout-list" style="width:13px;height:13px"></i>
                 <span class="t">全部任务</span>
-                <span class="hint">work 与看板任务 · 未完成 / 已完成</span>
+                <span class="hint">work 与看板任务 · 未开始 / 未完成 / 已完成</span>
               </div>
               <div class="inboxboard" id="inboxBoard"></div>
             </div>

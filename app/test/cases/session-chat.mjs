@@ -520,11 +520,16 @@ export default [
       await sendChat(app, '[[ASK]]帮我确认一件事')
       await app.waitFor(`!!document.querySelector('.askcard')`, 20000, '提问卡片出现')
       await app.waitFor(`(() => { const c=document.querySelector('.askcard'); return !!c && c.textContent.includes('选哪个？') && c.textContent.includes('A 选项') })()`, 8000, '提问内容渲染')
+      // 被提问阻塞时应被识别为「等待用户回答」，供需求便签打标
+      const awaitingIds = await app.invoke('chat', 'awaiting')
+      assert.ok(Array.isArray(awaitingIds) && awaitingIds.includes(t.id), '等待回答的任务应出现在 awaiting 列表：' + JSON.stringify(awaitingIds))
       // 选择第一个选项并提交
       await app.call(() => { const b = [...document.querySelectorAll('.askcard .qopt')].find((x) => x.textContent.includes('A 选项')); if (b) b.click() })
       await app.call(() => { const b = document.querySelector('.askcard [data-ask-submit]'); if (b) b.click() })
       await app.waitFor(`[...document.querySelectorAll('.msg.a .abody')].some(b=>b.textContent.includes('已回答：A 选项'))`, 20000, '回答后继续输出')
       await app.waitFor(`(() => { const c=document.querySelector('.askcard'); return !!c && c.textContent.includes('已回答') })()`, 8000, '卡片进入已回答状态')
+      // 回答后不再等待，awaiting 应清除
+      await app.waitFor(`(async () => { const a = await window.zzwork.invoke('chat','awaiting'); return Array.isArray(a) && !a.includes(${JSON.stringify(t.id)}) })()`, 8000, '回答后 awaiting 清除')
       // 流式正文先于落库出现，等最终消息写入后再断言，避免读库竞态
       await app.waitFor(`(async () => {
         const l = await window.zzwork.invoke('store','messages.list',{ taskId: ${JSON.stringify(t.id)} })

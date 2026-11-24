@@ -6,7 +6,8 @@ import { toast } from '../components/toast.js'
 import { showContextMenu } from '../components/contextMenu.js'
 import { openDiffTab } from './editor.js'
 import { showPane } from './tabs.js'
-import { emit, on } from '../lib/state.js'
+import { emit, on, state } from '../lib/state.js'
+import { markTaskRead } from '../lib/unread.js'
 
 let taskId = null
 let sessionId = null
@@ -389,8 +390,18 @@ export function initChatView() {
 
   // 切到 AI 对话时滚到最新一条（首次打开任务时 pane 尚未可见，renderChat 里滚动无效）
   on('pane-changed', (name) => {
-    if (name === 'ai' && taskId) requestAnimationFrame(() => scrollBottom(true))
+    if (name === 'ai' && taskId) {
+      requestAnimationFrame(() => scrollBottom(true))
+      markTaskRead(taskId)
+    }
   })
+  // 窗口回到前台且正停在 AI 对话：把当前任务的未读清掉
+  const markVisibleRead = () => {
+    if (document.visibilityState === 'hidden') return
+    if (state.pane === 'ai' && taskId) markTaskRead(taskId)
+  }
+  document.addEventListener('visibilitychange', markVisibleRead)
+  window.addEventListener('focus', markVisibleRead)
 
   onChatEvent(handleEvent)
 }
@@ -1141,6 +1152,8 @@ export function handleEvent(ev) {
     }
     scrollBottom(true)
     if (!wasOrchestrate) refreshChatHeader()
+    // 正停在本任务的 AI 对话且窗口可见：本轮回复即时算作已读
+    if (state.pane === 'ai' && document.visibilityState !== 'hidden') markTaskRead(taskId)
     // 本轮正常结束：若有排队消息，自动发出下一条（顺序接力，一条一轮）
     drainIfQueued()
     return

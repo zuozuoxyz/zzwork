@@ -167,16 +167,11 @@
 #zzv .askcard .afoot { display: flex; justify-content: flex-end; margin-top: 10px }
 #zzv .askcard .fdone { display: inline-flex; align-items: center; gap: 5px; color: #4ade80; font-size: 11px }
 
-/* 需求便签：侧栏入口 + 编辑区唯一 tab */
-#zzv .inbox { border-bottom: 1px solid var(--bd); padding: 6px 8px; flex: 0 0 auto }
-#zzv .inbox-entry { width: 100%; display: flex; align-items: center; gap: 7px; padding: 6px 8px;
-  border: 1px solid var(--bd2); border-radius: 6px; background: var(--card); color: var(--dim);
-  font-size: 11.5px; font-family: inherit; cursor: pointer }
-#zzv .inbox-entry:hover { background: rgba(255,255,255,.07); color: var(--fg) }
-#zzv .inbox-entry .t { flex: 1; text-align: left }
-#zzv .inbox-entry .hint { font-size: 10px; color: var(--faint) }
+/* 需求便签：标题栏入口 + 编辑区唯一 tab */
 #zzv #pane-inbox { flex-direction: column }
 #zzv #pane-inbox.on { display: flex }
+/* 便签激活时隐藏左侧栏，编辑区获得更大宽度，不依赖当前项目/看板视图 */
+#zzv.inbox-only .side { display: none }
 #zzv .inboxpane { display: flex; flex-direction: column; min-height: 0; padding: 12px 16px; box-sizing: border-box }
 #zzv .inboxbar { display: flex; align-items: center; gap: 8px; padding-bottom: 8px;
   border-bottom: 1px solid var(--bd); font-size: 12px; color: var(--dim) }
@@ -211,10 +206,10 @@
 #zzv .inboxreview .ir-ctrl select, #zzv .inboxreview .ir-ctrl input { height: 26px; border-radius: 5px;
   background: var(--bg); border: 1px solid var(--bd2); color: var(--fg); font-size: 11.5px;
   padding: 0 6px; font-family: inherit; outline: none }
-#zzv .inboxreview .ir-act { width: 96px }
+#zzv .inboxreview .ir-act { width: 138px }
 #zzv .inboxreview .ir-name { flex: 1; min-width: 120px }
-#zzv .inboxreview .ir-task { width: 150px }
-#zzv .inboxreview .ir-scope, #zzv .inboxreview .ir-type { width: 92px }
+#zzv .inboxreview .ir-kind { width: 104px }
+#zzv .inboxreview .ir-group { width: 150px }
 #zzv .inboxreview .ir-confirm { margin-left: auto }
 #zzv .inboxreview .ir-reason { display: flex; gap: 10px; color: var(--faint); font-size: 10.5px }
 #zzv .inboxreview .ir-foot { display: flex; align-items: center; gap: 10px; margin-top: 8px;
@@ -308,7 +303,7 @@
 #zzv .inboxvdiv:hover, #zzv .inboxvdiv.dragging { background: rgba(14,165,233,.25) }
 #zzv .inboxboardwrap { flex: 1; min-width: 0; display: flex; flex-direction: column;
   padding: 12px 16px; box-sizing: border-box; border-left: 1px solid var(--bd) }
-#zzv .inboxboard { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 10px;
+#zzv .inboxboard { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px;
   margin-top: 10px; overflow: auto; align-content: start }
 #zzv .ibcol { display: flex; flex-direction: column; min-width: 0 }
 #zzv .ibcolh { display: flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--dim);
@@ -317,6 +312,8 @@
   background: var(--card); border: 1px solid var(--bd); border-radius: 9px; padding: 0 7px }
 #zzv .ibcolb { display: flex; flex-direction: column; gap: 6px; min-height: 80px; border-radius: 6px }
 #zzv .ibcolb.drop-on { background: rgba(14,165,233,.06); outline: 1px dashed var(--accent); outline-offset: -2px }
+#zzv .ibcard.drop-before { box-shadow: 0 -2px 0 0 var(--accent) }
+#zzv .ibcolb.drop-end, #zzv .codeboard.drop-end { box-shadow: inset 0 -2px 0 0 var(--accent) }
 #zzv .ibcard { display: flex; align-items: center; gap: 7px; padding: 7px 9px; border-radius: 7px;
   background: var(--card); border: 1px solid var(--bd); cursor: pointer; font-size: 12px }
 #zzv .ibcard:hover { border-color: var(--accent); background: rgba(14,165,233,.08) }
@@ -328,6 +325,9 @@
 #zzv .ibcard .ibp { flex: 0 0 auto; font-size: 10px; color: var(--faint) }
 #zzv .ibcard.board .ibp { color: #a074c4 }
 #zzv .ibcard .ibdone { flex: 0 0 auto; font-size: 10px; color: #4ade80 }
+#zzv .ibcard .ibunread { flex: 0 0 auto; font-size: 10px; line-height: 1; padding: 2px 6px; border-radius: 8px;
+  font-weight: 600; color: #06121f; background: var(--accent) }
+#zzv .ibcard .ibunread.ask { color: #1a1205; background: #f59e0b }
 
 /* 任务看板（短期任务） */
 #zzv #pane-board { flex-direction: column }

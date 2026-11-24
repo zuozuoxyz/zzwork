@@ -4,6 +4,7 @@ import { state, emit } from '../lib/state.js'
 import { $, esc, ic, refreshIcons } from '../lib/ui.js'
 import { reloadBoard } from '../lib/data.js'
 import { renderMarkdown, openImageZoom, bindMarkdownClicks } from '../components/markdown.js'
+import { markTaskRead } from '../lib/unread.js'
 import { buildImageAttachment, imagesFromPaste, ATTACH_MAX } from '../workbench/chat.js'
 import { toast } from '../components/toast.js'
 
@@ -506,6 +507,7 @@ function chatHtml(card) {
 export function mountCardChat(hostEl, card, preset) {
   const pre = preset && typeof preset === 'object' ? preset : { sessionId: preset || '' }
   hostEl.innerHTML = chatHtml(card)
+  markTaskRead(card.id)
   const box = hostEl.querySelector('#bcMsgs')
   // 对话/详情里的链接：交给系统浏览器或忽略，绝不让主窗口跳转（否则会覆盖整个应用）
   bindMarkdownClicks(box)
@@ -666,6 +668,8 @@ export function mountCardChat(hostEl, card, preset) {
       if (ev.error) msgs.push({ role: 'assistant', kind: 'error', content: '出错：' + ev.error })
       render()
       refreshStatus()
+      // 正看着这张卡片对话且窗口可见：本轮回复即时算作已读
+      if (state.pane === 'card' && state.cardActive === card.id && document.visibilityState !== 'hidden') markTaskRead(card.id)
       return
     }
   }

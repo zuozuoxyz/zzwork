@@ -1,6 +1,6 @@
 {
   "name": "zzwork",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "private": true,
   "description": "zzwork：任务工作台（Electron 独立应用）",
   "repository": {

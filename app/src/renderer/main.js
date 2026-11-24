@@ -144,6 +144,7 @@ function closeCardTab(id) {
 // 从看板/设置/详情切回常规任务视图：右栏大块必须跟着切走，不能停留在整页模式
 function exitSpecialMode() {
   if (state.mode === 'item') { closeItem(); return }
+  if (state.pane === 'inbox') { closeInbox(); return }
   abandonCardTabs()
   if (state.mode === 'board' || state.mode === 'settings' || state.mode === 'card') {
     state.mode = 'task'
@@ -284,6 +285,7 @@ function closeItem() {
 
 async function openInbox() {
   abandonCardTabs()
+  rememberTaskPane()
   state.inboxOpen = true
   state.mode = 'task'
   state.item = null
@@ -293,9 +295,14 @@ async function openInbox() {
   renderInboxCode()
 }
 
+// 离开便签：回到进入前的任务 pane（便签没有 × 按钮，靠活动栏/选择任务切走）
 function closeInbox() {
   state.inboxOpen = false
-  showPane('info')
+  if (state.pane === 'inbox') {
+    let next = state.taskId ? (state.lastTaskPane || 'ai') : 'info'
+    if (next === 'file' && !state.activeFile) next = 'ai'
+    showPane(next)
+  }
   renderTabs()
 }
 
@@ -377,6 +384,10 @@ function bindEvents() {
   on('pane-changed', (name) => {
     // 编辑区在「看板」与「卡片对话」间切换时，左侧栏同步切回看板配置/工作目录树
     syncBoardSide()
+    // 便签激活时隐藏左侧栏，编辑区更宽；标题栏入口同步高亮
+    const root = document.getElementById('zzv')
+    if (root) root.classList.toggle('inbox-only', name === 'inbox')
+    const ib = $('#openInboxBtn'); if (ib) ib.classList.toggle('on', name === 'inbox')
     if (name === 'ai' && state.taskId) refreshChatHeader()
   })
   on('open-session', async ({ taskId, sessionId } = {}) => {

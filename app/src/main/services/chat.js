@@ -624,6 +624,20 @@ function liveSnapshot(taskId, sessionId) {
   return null
 }
 
+// 正在等待用户回答 AskUserQuestion 的任务（运行未结束但被提问阻塞）
+function listAwaiting() {
+  const S = getStore()
+  const ids = new Set()
+  for (const e of runs.values()) {
+    if (!e || !e.asks || e.asks.size === 0 || !e.taskId) continue
+    // 仅面向用户的顶层会话（隐藏询问/子代理的提问无法在便签里回答，不计入）
+    let kind = ''
+    try { const sess = e.sessionId ? S.getSession(e.sessionId) : null; kind = sess ? sess.kind : '' } catch {}
+    if (kind === 'chat' && !e.parentRunId) ids.add(e.taskId)
+  }
+  return [...ids]
+}
+
 function finishRun(runId, status, result, usage) {
   const S = getStore()
   const entry = runs.get(runId)
@@ -638,8 +652,34 @@ function finishRun(runId, status, result, usage) {
       finished_at: new Date().toISOString()
     })
   } catch {}
+  // 面向用户的会话（kind='chat'）在顶层轮次结束时记为「有未读的 AI 回复」；
+  // 隐藏询问(ask)/子代理(subagent)与子轮次不算，避免干扰未读标记
+  if (entry && status !== 'stopped') {
+    let kind = ''
+    try { const sess = entry.sessionId ? S.getSession(entry.sessionId) : null; kind = sess ? sess.kind : '' } catch {}
+    if (kind === 'chat' && !entry.parentRunId) {
+      markTaskReply(S, entry.taskId)
+      post({ type: 'unread', taskId: entry.taskId })
+    }
+  }
   if (entry && entry.onFinish) { try { entry.onFinish({ status, result: String(result || ''), usage: usage || null }) } catch {} }
   runs.delete(runId)
+}
+
+// 记录任务「最近一次 AI 回复结束」时间，供渲染层与 ui:taskRead 比较得出未读
+function markTaskReply(S, taskId) {
+  if (!taskId) return
+  try {
+    let m = {}
+    try { m = JSON.parse(S.getSetting('ui:taskReplyAt', '') || '{}') || {} } catch {}
+    m[taskId] = Date.now()
+    const keys = Object.keys(m)
+    if (keys.length > 800) {
+      keys.sort((a, b) => (m[a] || 0) - (m[b] || 0))
+      for (const k of keys.slice(0, keys.length - 600)) delete m[k]
+    }
+    S.setSetting('ui:taskReplyAt', JSON.stringify(m))
+  } catch {}
 }
 
 function sessionMetaUpdate(S, sessionId, patch) {
@@ -721,7 +761,7 @@ async function send(p) {
   })
   const entry = {
     kill: null, taskId: task.id, sessionId: session.id, childRunIds: new Set(),
-    onFinish: p.onFinish || null, aborted: false,
+    onFinish: p.onFinish || null, aborted: false, parentRunId: p.parentRunId || '',
     startedAt: Date.now(), snapshot: null, asks: null
   }
   runs.set(runId, entry)
@@ -1268,7 +1308,7 @@ async function runBuiltin({ runId, task, session, agent, model, changes: ch, env
       sessionId: session.id, kind: 'text', runId, meta: cacheMeta, fileMeta: fullMeta
     })
     appendChatFile(task, 'assistant', acc, { ...meta, sessionTitle: session.title })
-    changes.saveBaseline(S, session.id, task, env, ch && ch.ck && ch.ck.kind)
+    await changes.saveBaseline(S, session.id, task, env, ch && ch.ck && ch.ck.kind)
     post2({
       type: 'done', content: acc, messageId: mid, tokens: inputTok + outputTok,
       inputTokens: inputTok, outputTokens: outputTok, cachedTokens: usage.cached,
@@ -1287,7 +1327,7 @@ async function runBuiltin({ runId, task, session, agent, model, changes: ch, env
         sessionId: session.id, kind: 'text', runId, meta: cacheMeta, fileMeta: fullMeta
       })
       post2({ type: 'done', content, durationMs: fin.durationMs, parts: cacheMeta.parts })
-      changes.saveBaseline(S, session.id, task, env, ch && ch.ck && ch.ck.kind)
+      await changes.saveBaseline(S, session.id, task, env, ch && ch.ck && ch.ck.kind)
       finishRun(runId, 'stopped', content)
       scheduleTurnDiff({ task, session, runId, env, turnStart })
     } else {
@@ -1534,7 +1574,7 @@ async function runCli({ runId, task, session, agent, changes: ch, prompt, env, t
       sessionId: session.id, kind: 'text', runId, meta: cacheMeta, fileMeta: fullMeta
     })
     appendChatFile(task, 'assistant', content, { ...agentMeta, sessionTitle: session.title })
-    changes.saveBaseline(S, session.id, task, env, ch && ch.ck && ch.ck.kind)
+    await changes.saveBaseline(S, session.id, task, env, ch && ch.ck && ch.ck.kind)
     post2({
       type: 'done', content, messageId: mid, tokens: inputTok + outputTok,
       inputTokens: inputTok, outputTokens: outputTok, cachedTokens: cachedTok,
@@ -2029,6 +2069,7 @@ module.exports = {
   spawnSubagent,
   orchestrate,
   askRemote,
+  listAwaiting,
   // 供 featuremap 等辅助服务复用（避免重复实现模型/事件逻辑）
   post,
   auxStart,
@@ -2060,5 +2101,6 @@ module.exports = {
     ipcMain.handle('zz:chat:orchestrate', (_e, p) => orchestrate(p))
     ipcMain.handle('zz:chat:shells', (_e, p) => shellList(p.sessionId))
     ipcMain.handle('zz:chat:shellStop', (_e, p) => stopShell(p))
+    ipcMain.handle('zz:chat:awaiting', () => listAwaiting())
   }
 }

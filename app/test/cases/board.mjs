@@ -463,11 +463,11 @@ export default [
       await ensureAI(app)
       const before = (await boardList(app)).length
       const r = await app.invoke('inbox', 'apply', {
-        items: [{ action: 'new', scope: 'short', name: '临时查个接口', type: 'work', text: '临时查个接口返回格式' }],
+        items: [{ action: 'new', kind: 'board', name: '临时查个接口', text: '临时查个接口返回格式' }],
         execute: true
       })
       const ok = r.results.find((x) => x.ok)
-      assert.ok(ok && ok.scope === 'short', JSON.stringify(r.results))
+      assert.ok(ok && ok.kind === 'board', JSON.stringify(r.results))
       assert.equal(ok.sessionId, '', '短期卡片不立即开会话/执行')
       const list = await boardList(app)
       assert.equal(list.length, before + 1, '看板应新增卡片')

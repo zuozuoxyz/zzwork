@@ -4,7 +4,6 @@ import path from 'node:path'
 import { startFakeAI, sleep } from '../harness.mjs'
 import { selectTask, setView, ensureTask } from './_helpers.mjs'
 
-const ctx = { attachTaskId: '' }
 let server = null
 
 async function ensureServer(app) {
@@ -18,8 +17,8 @@ async function ensureServer(app) {
       if (sys.includes('需求归类器')) {
         return JSON.stringify({
           items: [
-            { index: 0, action: 'attach', taskId: ctx.attachTaskId, name: '', type: 'work', reason: '与已有任务相关', confidence: 0.92 },
-            { index: 1, action: 'new', name: '做一个全新的功能界面', type: 'work', reason: '独立需求', confidence: 0.85 }
+            { index: 0, action: 'ignore', kind: '', name: '', reason: '已有相关任务', confidence: 0.92 },
+            { index: 1, action: 'new', kind: 'task', name: '做一个全新的功能界面', reason: '独立需求', confidence: 0.85 }
           ]
         })
       }
@@ -210,8 +209,7 @@ export default [
   {
     name: '需求便签归类与执行',
     async run(app) {
-      const attach = await bindTask(app, '便签已有任务', {})
-      ctx.attachTaskId = attach.id
+      await bindTask(app, '便签已有任务', {})
       const workdir = await app.store('workdir.get')
       await selectTask(app, '便签已有任务')
       await app.click('.abi[data-view="projects"]')
@@ -220,6 +218,8 @@ export default [
       await app.waitFor(`document.querySelector('#pane-inbox').classList.contains('on')`, 5000, '便签 tab 打开')
       assert.equal(await app.count('.tab[data-pane="inbox"]'), 1, '便签 tab 唯一')
       assert.equal(await app.count('#tabbar .tab'), 1, '便签激活时编辑区只显示唯一 tab')
+      assert.equal(await app.count('.tab[data-pane="inbox"] .x'), 0, '便签 tab 不能关闭（无 ×）')
+      assert.equal(await app.call(() => getComputedStyle(document.querySelector('.side')).display), 'none', '便签激活时隐藏左侧栏，编辑区更宽')
       await app.click('#openInboxBtn')
       assert.equal(await app.count('.tab[data-pane="inbox"]'), 1, '再次点击不应重复打开')
 
@@ -236,11 +236,9 @@ export default [
       // 输入框被审阅面板替换
       assert.equal(await app.call(() => document.querySelector('#inboxInput').style.display), 'none', '输入框被审阅面板替换')
       const acts = await app.call(() => [...document.querySelectorAll('#inboxReview .ir-row .ir-act')].map((s) => s.value))
-      assert.deepEqual(acts, ['attach', 'new'])
-      const attachSel = await app.call(() => document.querySelector('#inboxReview .ir-row .ir-task').value)
-      assert.equal(attachSel, ctx.attachTaskId, '归入任务应选中已有任务')
+      assert.deepEqual(acts, ['ignore', 'new'])
       await app.call(() => { const c = document.querySelector('#ir-exec'); if (c) c.checked = false; return true })
-      // 逐条确认：第一条（归入任务）
+      // 逐条确认：第一条（忽略，已有相关任务）
       await app.click('#inboxReview .ir-row .ir-confirm')
       await app.waitFor(`document.querySelectorAll('#inboxReview .ir-row').length === 1`, 10000, '确认一条后剩一条')
       // 第二条（新建任务）→ 全部确认后自动回到输入框
@@ -260,12 +258,11 @@ export default [
       assert.equal(created.type, 'work')
       const ses = await app.store('sessions.list', { taskId: created.id })
       assert.equal(ses.length, 1, '新任务应有默认会话')
-      const info = fs.readFileSync(path.join(attach.path, '.zzwork', 'info.md'), 'utf8')
-      assert.ok(info.includes('便签已有任务 请补充日志'), '归入任务应追加需求')
       assert.equal(fs.readFileSync(inboxFile, 'utf8'), '', '应用后便签应清空')
 
-      await app.call(() => { const x = document.querySelector('.tab[data-pane="inbox"] .x'); if (x) x.click(); return true })
-      await app.waitFor(`!document.querySelector('.tab[data-pane="inbox"]')`, 5000, '便签 tab 关闭')
+      // 便签无关闭按钮：点活动栏「项目」离开
+      await app.click('.abi[data-view="projects"]')
+      await app.waitFor(`!document.querySelector('.tab[data-pane="inbox"]')`, 5000, '离开便签页')
     }
   },
   {
@@ -308,8 +305,8 @@ export default [
       // 清理
       await app.setValue('#inboxInput', '')
       await sleep(700)
-      await app.call(() => { const x = document.querySelector('.tab[data-pane="inbox"] .x'); if (x) x.click(); return true })
-      await app.waitFor(`!document.querySelector('.tab[data-pane="inbox"]')`, 5000, '便签 tab 关闭')
+      await app.click('.abi[data-view="projects"]')
+      await app.waitFor(`!document.querySelector('.tab[data-pane="inbox"]')`, 5000, '离开便签页')
     }
   },
   {
@@ -376,7 +373,154 @@ export default [
         return !!(x && x.status !== 'done')
       })()`, 8000, 'work 卡片恢复到未完成')
 
-      await app.call(() => { const x = document.querySelector('.tab[data-pane="inbox"] .x'); if (x) x.click(); return true })
+      await app.click('.abi[data-view="projects"]')
+      await app.waitFor(`!document.querySelector('.tab[data-pane="inbox"]')`, 5000, '离开便签页')
+    }
+  },
+  {
+    name: '便签全部任务：未开始单列 + 点击看板任务打开看板卡片',
+    async run(app) {
+      const workdir = await app.store('workdir.get')
+      const board = await app.invoke('board', 'create', { title: '便签看板未开始', content: '待开始' })
+      const work = await app.store('tasks.create', { dto: { name: '便签工作未完成', type: 'work', status: 'active', scope: 'long', path: path.join(workdir, 'inbox-work2') } })
+
+      await setView(app, 'projects')
+      await app.click('#openInboxBtn')
+      await app.waitFor(`document.querySelector('#pane-inbox').classList.contains('on')`, 5000, '便签打开')
+
+      // 未开始列只含 status=todo 的看板任务；work 任务在未完成列
+      await app.waitFor(`(() => {
+        const t = document.querySelector('#inboxBoard .ibcolb[data-col="todo"] .ibcard[data-task="${board.id}"]')
+        const o = document.querySelector('#inboxBoard .ibcolb[data-col="open"] .ibcard[data-task="${work.id}"]')
+        const boardInOpen = document.querySelector('#inboxBoard .ibcolb[data-col="open"] .ibcard[data-task="${board.id}"]')
+        return !!t && !!o && !boardInOpen
+      })()`, 8000, '未开始单列、未完成任务在未完成列')
+
+      // 点击看板任务：切到看板页并打开该卡片，而非项目任务信息页
+      await app.click(`#inboxBoard .ibcolb[data-col="todo"] .ibcard[data-task="${board.id}"]`)
+      await app.waitFor(`(() => {
+        const nav = document.querySelector('.abi[data-view="board"]')
+        const card = document.querySelector('#pane-card.on .cardchat-t')
+        const infoPane = document.querySelector('#pane-info.on')
+        return !!nav && nav.classList.contains('on') && !!card && card.textContent.includes('便签看板未开始') && !infoPane
+      })()`, 8000, '点击看板任务进入看板卡片')
+
+      // 收尾：关闭卡片
+      await app.call(() => { const x = document.querySelector('.tab[data-card] .x'); if (x) x.click(); return true })
+    }
+  },
+  {
+    name: '便签未完成列支持拖拽排序并持久化',
+    async run(app) {
+      const workdir = await app.store('workdir.get')
+      for (const n of ['排序A', '排序B', '排序C']) {
+        await app.store('tasks.create', { dto: { name: n, type: 'work', status: 'active', scope: 'long', path: path.join(workdir, 'inbox-sort-' + n) } })
+      }
+
+      await setView(app, 'projects')
+      await app.click('#openInboxBtn')
+      await app.waitFor(`document.querySelector('#pane-inbox').classList.contains('on')`, 5000, '便签打开')
+      await app.waitFor(`document.querySelectorAll('#inboxBoard .ibcolb[data-col="open"] .ibcard[data-task]').length >= 3`, 8000, '未完成列至少三张卡片')
+
+      const before = await app.call(() => [...document.querySelectorAll('#inboxBoard .ibcolb[data-col="open"] .ibcard[data-task]')].map((c) => c.getAttribute('data-task')))
+      const movedId = before[before.length - 1]
+      assert.ok(movedId && before[0] !== movedId, '存在可移动的末位卡片')
+
+      // 把末位卡片拖到列表最上方（插入到首张之前）
+      await app.call((mid) => {
+        const col = document.querySelector('#inboxBoard .ibcolb[data-col="open"]')
+        const cards = [...col.querySelectorAll('.ibcard[data-task]')]
+        const src = cards.find((c) => c.getAttribute('data-task') === mid)
+        const first = cards[0]
+        const r = first.getBoundingClientRect()
+        const dt = new DataTransfer()
+        const opt = { bubbles: true, cancelable: true, dataTransfer: dt, clientY: r.top + 1, clientX: r.left + 5 }
+        src.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt }))
+        col.dispatchEvent(new DragEvent('dragover', opt))
+        col.dispatchEvent(new DragEvent('drop', opt))
+        src.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }))
+        return true
+      }, movedId)
+
+      await app.waitFor(`(() => { const c = document.querySelector('#inboxBoard .ibcolb[data-col="open"] .ibcard[data-task]'); return !!c && c.getAttribute('data-task') === ${JSON.stringify(movedId)} })()`, 6000, '拖拽后该卡片置顶')
+
+      const raw = await app.store('settings.get', { key: 'ui:inboxOrder', dflt: '' })
+      const om = raw ? JSON.parse(raw) : {}
+      assert.ok(Array.isArray(om.open) && om.open[0] === movedId, '排序已持久化到设置：' + raw)
+
+      await app.click('.abi[data-view="projects"]')
+      await app.waitFor(`!document.querySelector('.tab[data-pane="inbox"]')`, 5000, '离开便签页')
+    }
+  },
+  {
+    name: '需求便签：AI 回复结束后显示未读标志，查看后消失',
+    async run(app) {
+      const t = await bindTask(app, '未读标记任务', {})
+      const info = await initChat(app, t.id)
+      const sent = await sendChat(app, t.id, '你好', info.session.id)
+      await waitRun(app, sent.runId)
+
+      // 主进程应在用户可见会话结束时记录该任务的回复结束时间
+      const replyRaw = await app.store('settings.get', { key: 'ui:taskReplyAt', dflt: '' })
+      const reply = replyRaw ? JSON.parse(replyRaw) : {}
+      assert.ok(reply[t.id] > 0, '应记录该任务的回复结束时间')
+
+      // 确保未读（清掉可能残留的已读时间）
+      await app.store('settings.set', { key: 'ui:taskRead', value: '{}' })
+
+      await setView(app, 'projects')
+      await app.click('#openInboxBtn')
+      await app.waitFor(`document.querySelector('#pane-inbox').classList.contains('on')`, 5000, '便签打开')
+      await app.waitFor(`(() => {
+        const c = document.querySelector('#inboxBoard .ibcard[data-task="${t.id}"]')
+        return !!c && !!c.querySelector('.ibunread')
+      })()`, 8000, '该任务显示未读标志')
+
+      // 模拟已读：已读时间晚于回复结束时间
+      await app.store('settings.set', { key: 'ui:taskRead', value: JSON.stringify({ [t.id]: Date.now() + 1000 }) })
+      await app.click('.abi[data-view="projects"]')
+      await app.waitFor(`!document.querySelector('.tab[data-pane="inbox"]')`, 5000, '离开便签页')
+      await app.click('#openInboxBtn')
+      await app.waitFor(`document.querySelector('#pane-inbox').classList.contains('on')`, 5000, '便签再次打开')
+      await app.waitFor(`(() => {
+        const c = document.querySelector('#inboxBoard .ibcard[data-task="${t.id}"]')
+        return !!c && !c.querySelector('.ibunread')
+      })()`, 8000, '已读后未读标志消失')
+      await app.click('.abi[data-view="projects"]')
+    }
+  },
+  {
+    name: '便签归档：看板任务落到未开始 / 短期任务归入分组',
+    async run(app) {
+      await ensureServer(app)
+      const g = await app.store('groups.create', { name: '归档分组', parentId: '' })
+      const gid = g && g.id || ''
+      assert.ok(gid, '分组应创建成功')
+
+      const r = await app.invoke('inbox', 'apply', {
+        execute: false,
+        items: [
+          { action: 'new', kind: 'board', text: '看板小需求', name: '看板小需求' },
+          { action: 'new', kind: 'task', text: '分组短期任务', name: '分组短期任务', groupId: gid },
+          { action: 'ignore', text: '忽略的需求' }
+        ]
+      })
+      const okr = (r.results || []).filter((x) => x.ok)
+      assert.equal(okr.length, 2, '忽略项不产生结果：' + JSON.stringify(r))
+
+      const tasks = await app.store('tasks.list')
+      const card = tasks.find((x) => x.name === '看板小需求')
+      assert.ok(card, '看板任务应创建')
+      assert.equal(card.scope, 'board')
+      assert.equal(card.status, 'todo')
+      assert.equal(await app.store('sessions.list', { taskId: card.id }).then((s) => s.length), 0, '看板卡片不建会话')
+
+      const short = tasks.find((x) => x.name === '分组短期任务')
+      assert.ok(short, '短期任务应创建')
+      assert.equal(short.scope, 'long')
+      assert.equal(short.group_id, gid, '短期任务应归入所选分组')
+      assert.equal(await app.store('sessions.list', { taskId: short.id }).then((s) => s.length), 1, '短期任务应有默认会话')
+      assert.ok(!tasks.some((x) => x.name === '忽略的需求'), '忽略项不应创建任务')
     }
   },
   {

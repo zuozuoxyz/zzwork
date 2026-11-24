@@ -76,6 +76,12 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
   cursor: pointer; display: inline-flex; align-items: center; justify-content: center; padding: 0 }
 #zzv .ib:hover { background: rgba(255,255,255,.08); color: var(--fg) }
 #zzv .ib[hidden] { display: none }
+/* 标题栏「需求便签」入口：带文字的胶囊按钮，比图标更醒目 */
+#zzv .ib.ib-entry { width: auto; gap: 5px; padding: 0 10px; font-size: 11.5px;
+  border: 1px solid var(--bd); border-radius: 5px; background: rgba(255,255,255,.04) }
+#zzv .ib.ib-entry:hover { color: var(--fg); border-color: var(--bd2); background: rgba(255,255,255,.08) }
+#zzv .ib.ib-entry.on { color: var(--brand); border-color: rgba(45,212,191,.5); background: rgba(45,212,191,.12) }
+#zzv .ib.ib-entry span { white-space: nowrap }
 /* 有新版本时出现在终端按钮左侧 */
 #zzv .ib.upd { position: relative; color: var(--brand) }
 #zzv .ib.upd:hover { color: #7dd3fc; background: rgba(14,165,233,.14) }

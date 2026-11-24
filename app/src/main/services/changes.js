@@ -52,21 +52,22 @@ function gitFor(env, taskPath) {
   return (list) => runFile('git', ['-C', taskPath, ...list])
 }
 
-function hashFile(file) {
-  try { return crypto.createHash('sha1').update(fs.readFileSync(file)).digest('hex').slice(0, 12) } catch { return '' }
+async function hashFile(file) {
+  try { return crypto.createHash('sha1').update(await fs.promises.readFile(file)).digest('hex').slice(0, 12) } catch { return '' }
 }
 
 function sigOf(text) {
   return crypto.createHash('sha1').update(String(text || '')).digest('hex').slice(0, 16)
 }
 
-function snapshotTree(root) {
+// 异步遍历（fs.promises）避免大目录同步读取阻塞主进程事件循环造成界面卡顿
+async function snapshotTree(root) {
   const out = {}
   let n = 0
-  const walk = (dir, rel, depth) => {
+  const walk = async (dir, rel, depth) => {
     if (n >= MAX_FILES || depth > 6) return
     let entries
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+    try { entries = await fs.promises.readdir(dir, { withFileTypes: true }) } catch { return }
     for (const e of entries) {
       if (n >= MAX_FILES) break
       const name = e.name
@@ -74,17 +75,17 @@ function snapshotTree(root) {
       const rp = rel ? rel + '/' + name : name
       if (e.isDirectory()) {
         if (SKIP_DIRS.has(name) || name.startsWith('.')) continue
-        walk(full, rp, depth + 1)
+        await walk(full, rp, depth + 1)
       } else if (e.isFile()) {
         if (SKIP_FILES.test(rp)) continue
         let st
-        try { st = fs.statSync(full) } catch { continue }
-        out[rp] = [st.size, Math.round(st.mtimeMs), st.size <= 262144 ? hashFile(full) : '']
+        try { st = await fs.promises.stat(full) } catch { continue }
+        out[rp] = [st.size, Math.round(st.mtimeMs), st.size <= 262144 ? await hashFile(full) : '']
         n++
       }
     }
   }
-  walk(root, '', 0)
+  await walk(root, '', 0)
   return out
 }
 
@@ -202,9 +203,9 @@ async function collectGit(task, env, ck, budget) {
   }
 }
 
-function collectSnapshot(task, ck, budget) {
+async function collectSnapshot(task, ck, budget) {
   const prev = ck && ck.snapshot
-  const next = snapshotTree(task.path)
+  const next = await snapshotTree(task.path)
   const p = prev && typeof prev === 'object' ? prev : null
   if (!p) {
     return {
@@ -245,7 +246,7 @@ async function collect({ task, agent, env: envIn, ck, budget }) {
   if (env.kind !== 'local') {
     return { text: '', summary: '远程环境暂不检测文件快照', count: 0, detail: '', ck: null }
   }
-  try { return collectSnapshot(task, ck, limit) } catch (e) {
+  try { return await collectSnapshot(task, ck, limit) } catch (e) {
     return { text: '', summary: '变更检测失败：' + e.message, count: 0, detail: '', ck: null }
   }
 }
@@ -288,20 +289,20 @@ async function checkpoint(task, env) {
     if (g) return g
   } catch {}
   if (e.kind !== 'local') return null
-  try { return { kind: 'snapshot', snapshot: snapshotTree(task.path), at: Date.now() } } catch { return null }
+  try { return { kind: 'snapshot', snapshot: await snapshotTree(task.path), at: Date.now() } } catch { return null }
 }
 
 // 回合结束：把当下（含 AI 本轮改动）的状态记为"下次注入"的基线。
 // 非 Git 本地目录用同步快照，保证回合结束即落库、下次请求立刻读到；
 // Git 目录需要异步 git 查询，后台完成后保存（不影响回合结束、按钮态）。
-function saveBaseline(S, sessionId, task, env, modeHint) {
+async function saveBaseline(S, sessionId, task, env, modeHint) {
   if (!sessionId || !task || !task.path) return
   if (modeHint === 'git') {
-    gitCheckpoint(task, env).then((ck) => { if (ck) saveCheckpoint(S, sessionId, ck) }).catch(() => {})
+    try { const ck = await gitCheckpoint(task, env); if (ck) saveCheckpoint(S, sessionId, ck) } catch {}
     return
   }
   if (!env || env.kind === 'local') {
-    try { saveCheckpoint(S, sessionId, { kind: 'snapshot', snapshot: snapshotTree(task.path), at: Date.now() }) } catch {}
+    try { saveCheckpoint(S, sessionId, { kind: 'snapshot', snapshot: await snapshotTree(task.path), at: Date.now() }) } catch {}
   }
 }
 
@@ -321,13 +322,13 @@ function readableLocally(taskPath, env) {
   return false
 }
 
-function readTextSnapshot(root) {
+async function readTextSnapshot(root) {
   const out = new Map()
   let n = 0
-  const walk = (dir, rel, depth) => {
+  const walk = async (dir, rel, depth) => {
     if (n >= TURN_MAX_FILES || depth > 6) return
     let entries
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+    try { entries = await fs.promises.readdir(dir, { withFileTypes: true }) } catch { return }
     for (const e of entries) {
       if (n >= TURN_MAX_FILES) break
       const name = e.name
@@ -335,21 +336,21 @@ function readTextSnapshot(root) {
       const rp = rel ? rel + '/' + name : name
       if (e.isDirectory()) {
         if (SKIP_DIRS.has(name) || name.startsWith('.')) continue
-        walk(full, rp, depth + 1)
+        await walk(full, rp, depth + 1)
       } else if (e.isFile()) {
         if (SKIP_FILES.test(rp)) continue
         let st
-        try { st = fs.statSync(full) } catch { continue }
+        try { st = await fs.promises.stat(full) } catch { continue }
         if (st.size > TURN_TEXT_LIMIT) { out.set(rp, { bin: true, text: '' }); n++; continue }
         let buf
-        try { buf = fs.readFileSync(full) } catch { continue }
+        try { buf = await fs.promises.readFile(full) } catch { continue }
         if (buf.includes(0)) out.set(rp, { bin: true, text: '' })
         else out.set(rp, { text: buf.toString('utf8') })
         n++
       }
     }
   }
-  walk(root, '', 0)
+  await walk(root, '', 0)
   return out
 }
 
@@ -426,7 +427,7 @@ async function captureTurn(task, env) {
   if (!task || !task.path) return null
   const e = env || resolveEnv(task.path, {})
   if (readableLocally(task.path, e)) {
-    try { return { kind: 'local', files: readTextSnapshot(task.path) } } catch { return null }
+    try { return { kind: 'local', files: await readTextSnapshot(task.path) } } catch { return null }
   }
   try {
     const git = gitFor(e, task.path)
@@ -445,7 +446,7 @@ function statusOf(code) {
 }
 
 async function localTurnDiff(task, start) {
-  const now = readTextSnapshot(task.path)
+  const now = await readTextSnapshot(task.path)
   const files = []
   let budget = STORE_PATCH_BUDGET
   const paths = [...new Set([...start.files.keys(), ...now.keys()])].sort()

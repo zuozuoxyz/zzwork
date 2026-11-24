@@ -80,11 +80,11 @@ function keywordTriage(items, tasks) {
       if (score > bestScore) { bestScore = score; best = t }
     }
     const named = tasks.find((t) => t.name && text.includes(t.name))
-    if (named) return { text, action: 'attach', taskId: named.id, taskName: named.name, name: '', type: 'work', scope: '', reason: '文本包含任务名', confidence: 0.9 }
+    if (named) return { text, action: 'ignore', kind: '', taskName: named.name, name: '', reason: '文本包含已有任务名', confidence: 0.9 }
     if (best && bestScore >= 0.34) {
-      return { text, action: 'attach', taskId: best.id, taskName: best.name, name: '', type: 'work', scope: '', reason: `关键词匹配（${Math.round(bestScore * 100)}%）`, confidence: bestScore }
+      return { text, action: 'ignore', kind: '', taskName: best.name, name: '', reason: `关键词匹配已有任务（${Math.round(bestScore * 100)}%）`, confidence: bestScore }
     }
-    return { text, action: 'new', taskId: '', taskName: '', name: text.slice(0, 40), type: 'work', scope: 'long', reason: '未匹配到已有任务', confidence: 0.5 }
+    return { text, action: 'new', kind: 'task', taskName: '', name: text.slice(0, 40), reason: '未匹配到已有任务', confidence: 0.5 }
   })
 }
 
@@ -104,10 +104,10 @@ async function triage(content) {
       let acc = ''
       const user = JSON.stringify({ items, tasks })
       await chatStream(modelLike(S, model), key, [{ role: 'user', content: user }],
-        '你是需求归类器。把每条需求归入已有任务或标记为新任务。只输出 JSON：' +
-        '{"items":[{"index":0,"action":"new|attach|ignore","taskId":"","name":"新任务名(≤20字)","type":"work|code","scope":"long|short","reason":"简短理由","confidence":0.8}]}。' +
-        'scope 判断：需要持续跟进、多轮协作的中长期事项为 long；一次性问答/临时小需求为 short。' +
-        '只有在需求与已有任务明显相关时才 attach；含糊需求输出 new。不要编造任务 id。',
+        '你是需求归类器。逐条判断：若已有相关任务则标记忽略（已有相关任务，不再新建）；否则新建任务，并判断是「看板任务」还是「短期任务」。只输出 JSON：' +
+        '{"items":[{"index":0,"action":"new|ignore","kind":"board|task","name":"新任务名(≤20字)","reason":"简短理由","confidence":0.8}]}。' +
+        'kind 仅在 action 为 new 时有效：用看板卡片跟踪的一次性小需求为 board；需要进入项目分组持续跟进的为 task。' +
+        '只有明显已有相关任务时才 ignore；含糊需求输出 new。不要编造任务 id。',
         (d) => { acc += d })
       const a = acc.indexOf('{'), b = acc.lastIndexOf('}')
       if (a >= 0 && b > a) {
@@ -122,20 +122,16 @@ async function triage(content) {
     const base = byIndex.get(i)
     const p = proposals && proposals.find((x) => Number(x.index) === i)
     if (!p) return base
-    let action = ['new', 'attach', 'ignore'].includes(p.action) ? p.action : base.action
-    let task = null
-    if (action === 'attach') {
-      task = tasks.find((t) => t.id === p.taskId) || tasks.find((t) => t.name === p.taskId) || null
-      if (!task) action = 'new'
-    }
+    let action = ['new', 'ignore', 'attach'].includes(p.action) ? p.action : base.action
+    // 旧模型的 attach（归入已有任务）统一视为 ignore（已有相关任务）
+    if (action === 'attach') action = 'ignore'
+    const kind = (p.kind === 'board' || p.kind === 'task') ? p.kind : (base.kind || 'task')
     return {
       text,
       action,
-      taskId: task ? task.id : (base.action === 'attach' ? base.taskId : ''),
-      taskName: task ? task.name : (base.action === 'attach' ? base.taskName : ''),
-      name: String(p.name || task && task.name || text.slice(0, 40)).slice(0, 40),
-      type: p.type === 'code' ? 'code' : 'work',
-      scope: (p.scope === 'short' || p.scope === 'long') ? p.scope : (base.scope || 'long'),
+      kind: action === 'ignore' ? '' : kind,
+      taskName: action === 'ignore' ? (base.taskName || '') : '',
+      name: String(p.name || base.name || text.slice(0, 40)).slice(0, 40),
       reason: String(p.reason || base.reason || ''),
       confidence: Math.max(0, Math.min(1, Number(p.confidence) || base.confidence || 0.5))
     }
@@ -184,16 +180,6 @@ function writeInfo(task, type) {
   } catch {}
 }
 
-function appendRequirement(task, text) {
-  const file = migrateLegacyInfo(task)
-  try {
-    fs.mkdirSync(path.dirname(file), { recursive: true })
-    if (!fs.existsSync(file)) writeInfo(task, task.type)
-    const stamp = new Date().toLocaleString('zh-CN', { hour12: false })
-    fs.appendFileSync(file, `\n## 需求 · ${stamp}\n\n- ${text}\n`, 'utf8')
-  } catch {}
-}
-
 function logApplied(results) {
   try {
     const file = logPath()
@@ -213,33 +199,20 @@ async function apply(payload) {
   for (const it of items) {
     if (!it || it.action === 'ignore') continue
     try {
-      if (it.action === 'attach') {
-        const task = S.getTask(it.taskId)
-        if (!task) throw new Error('目标任务不存在')
-        appendRequirement(task, it.text)
-        affected.add(task.id)
-        const session = S.createSession({
-          taskId: task.id, kind: 'chat', title: String(it.title || it.text || '需求').slice(0, 36), agentId: '', modelId: ''
-        })
-        let runId = ''
-        if (execute) {
-          const r = await chat.send({ taskId: task.id, text: it.text, sessionId: session.id })
-          runId = r && r.runId || ''
-        }
-        results.push({ ok: true, action: 'attach', scope: 'long', text: it.text, taskId: task.id, taskName: task.name, sessionId: session.id, runId })
-      } else if (it.scope === 'short') {
-        // 短期任务：落到看板卡片（未开始），不立即执行
+      if (it.kind === 'board') {
+        // 看板任务：落到看板卡片（未开始），不立即执行
         const title = String(it.name || it.text || '').trim().slice(0, 40) || '未命名卡片'
         const target = String(it.path || '').trim() || uniquePath(path.join(workRoot(), '.zzwork', 'board', safeName(title)), S)
-        const card = S.createTask({ name: title, type: it.type || 'work', scope: 'board', status: 'todo', path: target, agentId: 'builtin', meta: { content: String(it.text || '') } })
+        const card = S.createTask({ name: title, type: 'work', scope: 'board', status: 'todo', path: target, agentId: 'builtin', meta: { content: String(it.text || '') } })
         try { fs.mkdirSync(card.path, { recursive: true }) } catch {}
-        results.push({ ok: true, action: 'new', scope: 'short', text: it.text, taskId: card.id, taskName: card.name, sessionId: '', runId: '' })
+        results.push({ ok: true, action: 'new', kind: 'board', text: it.text, taskId: card.id, taskName: card.name, sessionId: '', runId: '' })
       } else {
+        // 短期任务：常规项目任务，可归入分组，并立即执行
         const name = String(it.name || it.text || '').trim().slice(0, 40) || '新任务'
         const target = String(it.path || '').trim() || uniquePath(path.join(workRoot(), safeName(name)), S)
-        const task = S.createTask({ name, type: it.type || 'work', path: target, agentId: 'builtin' })
+        const task = S.createTask({ name, type: 'work', groupId: it.groupId || null, path: target, agentId: 'builtin' })
         fs.mkdirSync(task.path, { recursive: true })
-        writeInfo(task, it.type || 'work')
+        writeInfo(task, 'work')
         affected.add(task.id)
         const session = S.createSession({
           taskId: task.id, kind: 'chat', title: String(it.title || it.text || '需求').slice(0, 36), agentId: '', modelId: ''
@@ -249,7 +222,7 @@ async function apply(payload) {
           const r = await chat.send({ taskId: task.id, text: it.text, sessionId: session.id })
           runId = r && r.runId || ''
         }
-        results.push({ ok: true, action: 'new', scope: 'long', text: it.text, taskId: task.id, taskName: task.name, sessionId: session.id, runId })
+        results.push({ ok: true, action: 'new', kind: 'task', text: it.text, taskId: task.id, taskName: task.name, sessionId: session.id, runId })
       }
     } catch (e) {
       results.push({

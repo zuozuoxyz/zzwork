@@ -93,8 +93,9 @@ export function renderTabs() {
 }
 
 function inboxTabHtml() {
+  // 需求便签为常驻 tab，不提供关闭按钮（不能 × 掉）；切走用左侧活动栏或选择任务
   const on = state.pane === 'inbox' ? ' on' : ''
-  return `<div class="tab${on}" data-pane="inbox">${ic('sticky-note', 12)}<span>需求便签</span><span class="x" title="关闭">×</span></div>`
+  return `<div class="tab${on}" data-pane="inbox">${ic('sticky-note', 12)}<span>需求便签</span></div>`
 }
 
 function bindTabClicks(bar) {
@@ -104,8 +105,7 @@ function bindTabClicks(bar) {
       const cardId = t.getAttribute('data-card')
       if (e.target.classList.contains('x')) {
         e.stopPropagation()
-        if (pane === 'inbox') emit('close-inbox')
-        else if (pane === 'card') emit('card-close', cardId)
+        if (pane === 'card') emit('card-close', cardId)
         else emit('file-close', t.getAttribute('data-file'))
         return
       }
