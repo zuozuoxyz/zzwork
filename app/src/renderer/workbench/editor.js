@@ -215,6 +215,11 @@ function isUnder(root, p) {
 }
 
 function currentTaskPath() {
+  // 看板卡片的工作目录即其任务目录：卡片激活时以其路径为根，html 预览等按此判定归属
+  if (state.mode === 'card' && state.cardActive) {
+    const c = state.boardCards.find((x) => x.id === state.cardActive) || state.tasks.find((x) => x.id === state.cardActive)
+    if (c && c.path) return c.path
+  }
   const t = activeTask()
   return (t && t.path) || ''
 }
@@ -424,7 +429,7 @@ async function loadEntry(path, name, virtual, content, external) {
 }
 
 function persistMemory(taskId) {
-  if (!taskId) return
+  if (!taskId || state.mode === 'card') return
   const paths = state.fileTabs.filter((t) => !t.virtual).map((t) => t.path)
   store('settings.set', { key: 'workbench:files:' + taskId, value: JSON.stringify(paths) }).catch(() => {})
 }

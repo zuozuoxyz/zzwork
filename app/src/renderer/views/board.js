@@ -1,9 +1,10 @@
 // 短期任务看板：卡片复用 tasks(scope='board')，进行中卡片内嵌 AI 会话
 import { invoke, store, env as envApi, chat as chatApi, onChatEvent, fsapi } from '../lib/api.js'
 import { state, emit } from '../lib/state.js'
-import { $, esc, ic, refreshIcons, basename } from '../lib/ui.js'
+import { $, esc, ic, refreshIcons } from '../lib/ui.js'
 import { reloadBoard } from '../lib/data.js'
-import { renderMarkdown } from '../components/markdown.js'
+import { renderMarkdown, openImageZoom, bindMarkdownClicks } from '../components/markdown.js'
+import { buildImageAttachment, imagesFromPaste, ATTACH_MAX } from '../workbench/chat.js'
 import { toast } from '../components/toast.js'
 
 const boardInvoke = (m, p) => invoke('board', m, p || {})
@@ -11,6 +12,8 @@ const boardInvoke = (m, p) => invoke('board', m, p || {})
 // 允许拖动的列 → 允许的目标列：未开始→进行中（开始，AI 自动作答）或直接→已完成（归档），待审核→已完成（归档），已完成→待审核（打回）
 const DRAG_TARGET = { todo: ['doing', 'done'], review: ['done'], done: ['review'] }
 let dragId = null
+// 正在启动作答的卡片：期间禁止再次拖动/重复触发，避免连拖两次跑出重复对话
+const pendingStart = new Set()
 
 export function initBoardView() {
   const nb = $('#boardNewBtn')
@@ -53,7 +56,7 @@ function onDragStart(e) {
   const cardEl = e.target.closest && e.target.closest('.bcard[data-card]')
   if (!cardEl) return
   const card = state.boardCards.find((c) => c.id === cardEl.getAttribute('data-card'))
-  if (!card || !DRAG_TARGET[card.status]) { e.preventDefault(); return }
+  if (!card || !DRAG_TARGET[card.status] || pendingStart.has(card.id)) { e.preventDefault(); return }
   dragId = card.id
   cardEl.classList.add('dragging')
   if (e.dataTransfer) {
@@ -86,8 +89,18 @@ function onDrop(e) {
   clearDrag()
   if (!card || !target || !allowed || !allowed.includes(target)) return
   e.preventDefault()
-  if (target === 'doing') startCard(card, { openChat: false }).catch((err) => toast(err.message, 'err'))
-  else if (target === 'done') finishCard(card).catch((err) => toast(err.message, 'err'))
+  if (target === 'doing') {
+    // 只允许「未开始 → 进行中」；已在启动中则忽略重复拖动
+    if (card.status !== 'todo' || pendingStart.has(card.id)) return
+    pendingStart.add(card.id)
+    // 乐观移动：立刻挪进「进行中」，避免“拖了没反应”再拖一次导致重复作答
+    card.status = 'doing'
+    const body = $('#boardBody')
+    if (body) { renderKanban(body); refreshIcons() }
+    startCard(card, { openChat: false })
+      .catch((err) => { card.status = 'todo'; toast(err.message, 'err'); renderBoard().catch(() => {}) })
+      .finally(() => pendingStart.delete(card.id))
+  } else if (target === 'done') finishCard(card).catch((err) => toast(err.message, 'err'))
   else if (target === 'review') reopenCard(card).catch((err) => toast(err.message, 'err'))
 }
 
@@ -122,7 +135,7 @@ async function renderSide() {
   const dflt = state.models.find((m) => m.is_default) || state.models[0] || null
   const allAgents = state.agents.length ? state.agents : [{ id: 'builtin', name: '内置模型聊天', kind: 'builtin' }]
   const okIds = await localAvailableAgentIds()
-  const availAgents = okIds ? allAgents.filter((a) => okIds.has(a.id)) : allAgents
+  const availAgents = okIds ? allAgents.filter((a) => a.kind === 'external' || okIds.has(a.id)) : allAgents
   const agents = availAgents.length ? availAgents : allAgents
   const skills = state.skills.filter((s) => s.env_id === 'global')
   const mcps = state.mcp.filter((m) => m.env_id === 'global')
@@ -227,7 +240,7 @@ async function newCard() {
   const r = await openEditor({ name: '', meta: {} }, false)
   if (!r || !r.save) return
   try {
-    await boardInvoke('create', { title: r.title, content: r.content })
+    await boardInvoke('create', { title: r.title, content: r.content, attachments: r.attachments || [] })
     await renderBoard()
   } catch (e) { toast('创建失败：' + e.message, 'err') }
 }
@@ -275,7 +288,7 @@ async function editCard(card) {
   const r = await openEditor(card, true)
   if (!r || r.cancel) return
   try {
-    await boardInvoke('update', { id: card.id, title: r.title, content: r.content })
+    await boardInvoke('update', { id: card.id, title: r.title, content: r.content, attachments: r.attachments || [] })
     // 仅保存：不打开对话标签，停留在看板
     await renderBoard()
   } catch (e) { toast('保存失败：' + e.message, 'err') }
@@ -312,17 +325,48 @@ function openEditor(card, existing) {
         <label class="blab">任务名称</label>
         <input class="binput" id="bcTitle" placeholder="给这个任务起个名字" value="${esc(card.name || '')}">
         <label class="blab">任务详情</label>
-        <textarea class="bta" id="bcContent" placeholder="描述要做的事，AI 会据此作答">${esc(content)}</textarea>
+        <textarea class="bta" id="bcContent" placeholder="描述要做的事，AI 会据此作答（可粘贴图片）">${esc(content)}</textarea>
+        <div class="attstrip" id="bcAttachEd"></div>
       </div>
       <div class="bfoot">
         <span class="sp"></span>
         <button class="btn" data-act="cancel">取消</button>
         <button class="btn pri" data-act="save">保存</button>
       </div>`)
+    let editAtt = (card.meta && Array.isArray(card.meta.attachments))
+      ? card.meta.attachments.filter((a) => a && a.dataUrl).map((a) => ({ ...a, id: a.id || ('att-' + Math.random().toString(36).slice(2)) }))
+      : []
+    const edStrip = mask.querySelector('#bcAttachEd')
+    const edContent = mask.querySelector('#bcContent')
+    const renderEdAtt = () => {
+      edStrip.classList.toggle('on', editAtt.length > 0)
+      edStrip.innerHTML = editAtt.map((a) =>
+        `<div class="attchip" title="${esc(a.name)}"><img src="${esc(a.thumb || a.dataUrl)}" alt="">
+           <button class="attx" data-rm="${esc(a.id)}" title="移除">×</button></div>`).join('')
+    }
+    renderEdAtt()
+    edContent.addEventListener('paste', (e) => {
+      const files = imagesFromPaste(e)
+      if (!files.length) return
+      e.preventDefault()
+      const room = ATTACH_MAX - editAtt.length
+      if (room <= 0) { toast(`最多 ${ATTACH_MAX} 张图片`, 'warn'); return }
+      files.slice(0, room).forEach(async (f) => {
+        const a = await buildImageAttachment(f)
+        if (a) { editAtt.push(a); renderEdAtt() }
+      })
+    })
+    edStrip.addEventListener('click', (e) => {
+      const btn = e.target.closest && e.target.closest('[data-rm]')
+      if (!btn) return
+      editAtt = editAtt.filter((a) => a.id !== btn.getAttribute('data-rm'))
+      renderEdAtt()
+    })
     const finish = (v) => { close(); resolve(v) }
     const collect = () => ({
       title: mask.querySelector('#bcTitle').value.trim() || '未命名任务',
-      content: mask.querySelector('#bcContent').value
+      content: mask.querySelector('#bcContent').value,
+      attachments: editAtt.map(({ name, mime, dataUrl, thumb, size }) => ({ name, mime, dataUrl, thumb, size }))
     })
     mask.querySelector('[data-act="cancel"]').addEventListener('click', () => finish({ cancel: true }))
     mask.querySelector('[data-act="save"]').addEventListener('click', () => finish({ save: true, ...collect() }))
@@ -427,7 +471,13 @@ function cardDiffHtml(m) {
 }
 function cardMsgHtml(m) {
   if (m.kind === 'diff') return `<div class="carddiff">${cardDiffHtml(m)}</div>`
-  if (m.role === 'user') return `<div class="bmsg u">${esc(m.content || '')}</div>`
+  if (m.role === 'user') {
+    const atts = (m.meta && Array.isArray(m.meta.attachments)) ? m.meta.attachments : []
+    const imgs = atts.filter((a) => a && (a.thumb || a.dataUrl))
+      .map((a) => `<img class="uimg" src="${esc(a.thumb || a.dataUrl)}"${a.path ? ` data-path="${esc(a.path)}"` : ''} alt="${esc(a.name || '图片')}" title="点击放大">`).join('')
+    const textHtml = m.content ? `<span>${esc(m.content)}</span>` : ''
+    return `<div class="bmsg u">${textHtml}${imgs ? `<div class="ubatt">${imgs}</div>` : ''}</div>`
+  }
   if (m.kind === 'error') return `<div class="err">${esc(m.content || '')}</div>`
   if (m.pending) return `<div class="bmsg a"><div class="bpend"><span class="tspin"></span><span>思考中…</span></div></div>`
   return `<div class="bmsg a">${cardPartsHtml(cardPartsOf(m), !!m.stream)}</div>`
@@ -444,7 +494,8 @@ function chatHtml(card) {
     </div>
     <div class="bchat" id="bcMsgs"><div class="hint">加载中…</div></div>
     <div class="bchat-in" id="bcInWrap">
-      <textarea class="bta" id="bcInput" rows="2" placeholder="继续追问…（Enter 发送，Shift+Enter 换行）"></textarea>
+      <div class="attstrip" id="bcAttach"></div>
+      <textarea class="bta" id="bcInput" rows="2" placeholder="继续追问…（Enter 发送，Shift+Enter 换行，可粘贴图片）"></textarea>
       <div class="bchat-act">
         <button class="btn pri" data-act="send">发送</button>
       </div>
@@ -456,15 +507,40 @@ export function mountCardChat(hostEl, card, preset) {
   const pre = preset && typeof preset === 'object' ? preset : { sessionId: preset || '' }
   hostEl.innerHTML = chatHtml(card)
   const box = hostEl.querySelector('#bcMsgs')
+  // 对话/详情里的链接：交给系统浏览器或忽略，绝不让主窗口跳转（否则会覆盖整个应用）
+  bindMarkdownClicks(box)
   const statusEl = hostEl.querySelector('#bcStatus')
   const sendBtn = hostEl.querySelector('[data-act="send"]')
   const stopBtn = hostEl.querySelector('[data-act="stop"]')
   const inputWrap = hostEl.querySelector('#bcInWrap')
   const input = hostEl.querySelector('#bcInput')
   const editBtn = hostEl.querySelector('[data-cardedit]')
+  const attStrip = hostEl.querySelector('#bcAttach')
+  let pendingAtt = []
+  const renderAtt = () => {
+    if (!attStrip) return
+    attStrip.classList.toggle('on', pendingAtt.length > 0)
+    attStrip.innerHTML = pendingAtt.map((a) =>
+      `<div class="attchip" title="${esc(a.name)}"><img src="${esc(a.thumb || a.dataUrl)}" alt="">
+         <button class="attx" data-rm="${esc(a.id)}" title="移除">×</button></div>`).join('')
+  }
+  const addAttFiles = async (files) => {
+    const room = ATTACH_MAX - pendingAtt.length
+    if (room <= 0) { toast(`最多 ${ATTACH_MAX} 张图片`, 'warn'); return }
+    for (const f of files.slice(0, room)) {
+      const a = await buildImageAttachment(f)
+      if (a) { pendingAtt.push(a); renderAtt() }
+    }
+  }
 
   const LABEL = { todo: '未开始', doing: '进行中', review: '待审核', done: '已完成' }
   const content = String((card.meta && card.meta.content) || '')
+  const detailAtts = (() => {
+    const atts = (card.meta && Array.isArray(card.meta.attachments)) ? card.meta.attachments : []
+    const imgs = atts.filter((a) => a && (a.thumb || a.dataUrl))
+      .map((a) => `<img class="uimg" src="${esc(a.thumb || a.dataUrl)}" alt="${esc(a.name || '图片')}" title="点击放大">`).join('')
+    return imgs ? `<div class="ubatt">${imgs}</div>` : ''
+  })()
   let sessionId = pre.sessionId || ''
   let running = false
   let msgs = []
@@ -493,7 +569,7 @@ export function mountCardChat(hostEl, card, preset) {
 
   const renderTodo = () => {
     const body = content
-      ? `<div class="cardbrief-l">任务详情</div><div class="cardbrief">${renderMarkdown(content)}</div>`
+      ? `<div class="cardbrief-l">任务详情</div><div class="cardbrief">${renderMarkdown(content)}${detailAtts}</div>`
       : `<div class="hint">这个任务还没有详情，点「编辑」补充后再开始作答。</div>`
     box.innerHTML = `${body}<div class="bstartwrap"><button class="btn pri" data-act="startRun">${ic('play', 12)}<span>开始作答</span></button></div>`
     refreshIcons()
@@ -501,7 +577,7 @@ export function mountCardChat(hostEl, card, preset) {
   const render = () => {
     if (!msgs.length) {
       if (status === 'todo') { renderTodo(); return }
-      const detail = content ? `<div class="cardbrief-l">任务详情</div><div class="cardbrief">${renderMarkdown(content)}</div>` : ''
+      const detail = content ? `<div class="cardbrief-l">任务详情</div><div class="cardbrief">${renderMarkdown(content)}${detailAtts}</div>` : ''
       if (status === 'done') { box.innerHTML = `${detail}<div class="hint">该任务已完成，仅供查看。</div>`; refreshIcons(); return }
       // 进行中/待审核但暂无历史消息：展示任务详情，避免空白
       box.innerHTML = detail || `<div class="hint">AI 正在根据标题与内容作答…</div>`
@@ -632,18 +708,23 @@ export function mountCardChat(hostEl, card, preset) {
   const send = async () => {
     if (status === 'done') return
     const text = input.value.trim()
-    if (!text || running || sendBtn.disabled) return
+    const atts = pendingAtt.map(({ name, mime, dataUrl, thumb, size }) => ({ name, mime, dataUrl, thumb, size }))
+    if ((!text && !atts.length) || running || sendBtn.disabled) return
     input.value = ''
+    pendingAtt = []
+    renderAtt()
     running = true
     syncRunning()
     try {
-      const r = await boardInvoke('send', { id: card.id, sessionId, text })
+      const r = await boardInvoke('send', { id: card.id, sessionId, text, attachments: atts })
       if (r && r.sessionId) sessionId = r.sessionId
       setStatus('doing')
       renderBoard().catch(() => {})
     } catch (e) {
       running = false
       syncRunning()
+      if (atts.length) { pendingAtt = atts.map((a) => ({ ...a, id: 'att-' + Math.random().toString(36).slice(2) })); renderAtt() }
+      if (text && !input.value.trim()) input.value = text
       toast('发送失败：' + e.message, 'err')
     }
   }
@@ -658,10 +739,31 @@ export function mountCardChat(hostEl, card, preset) {
     refreshStatus()
   }
 
-  box.addEventListener('click', (e) => { if (e.target.closest('[data-act="startRun"]')) startRun() })
+  box.addEventListener('click', (e) => {
+    if (e.target.closest('[data-act="startRun"]')) { startRun(); return }
+    const img = e.target.closest && e.target.closest('img.uimg')
+    if (img) {
+      const p = img.getAttribute('data-path')
+      const fallback = img.getAttribute('src') || ''
+      if (p) fsapi('readBase64', { path: p }).then((d) => openImageZoom((d && d.dataUrl) || fallback, img.alt)).catch(() => openImageZoom(fallback, img.alt))
+      else openImageZoom(fallback, img.alt)
+    }
+  })
   sendBtn.addEventListener('click', send)
   stopBtn.addEventListener('click', stopRun)
   input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send() } })
+  input.addEventListener('paste', (e) => {
+    const files = imagesFromPaste(e)
+    if (!files.length) return
+    e.preventDefault()
+    addAttFiles(files)
+  })
+  if (attStrip) attStrip.addEventListener('click', (e) => {
+    const btn = e.target.closest && e.target.closest('[data-rm]')
+    if (!btn) return
+    pendingAtt = pendingAtt.filter((a) => a.id !== btn.getAttribute('data-rm'))
+    renderAtt()
+  })
   if (editBtn) editBtn.addEventListener('click', () => editCard(card).catch((err) => toast(err.message, 'err')))
 
   unsub = onChatEvent(onEvent)
@@ -671,19 +773,3 @@ export function mountCardChat(hostEl, card, preset) {
   return cleanup
 }
 
-// 卡片工作目录内点文件：轻量只读预览，避免切换 pane 打乱卡片标签选中态
-export async function previewCardFile(filePath, name) {
-  let text = ''
-  try { text = await fsapi('readFile', { path: filePath }) } catch (e) { toast('读取失败：' + e.message, 'err'); return }
-  if (typeof text !== 'string') { toast('无法预览该文件', 'err'); return }
-  if (text.indexOf(String.fromCharCode(0)) !== -1) { toast('二进制文件暂不支持预览', 'err'); return }
-  const clipped = text.length > 200000 ? text.slice(0, 200000) + '\n…（内容过长，已截断）' : text
-  const isMd = /\.(md|markdown)$/i.test(name || '')
-  const body = isMd ? `<div class="md">${renderMarkdown(clipped)}</div>` : `<pre class="cardprev-pre">${esc(clipped)}</pre>`
-  const { mask, close } = showModal(`
-    <div class="mt">${esc(name || basename(filePath))}</div>
-    <div class="cardprev">${body}</div>
-    <div class="bfoot"><span class="sp"></span><button class="btn" data-act="close">关闭</button></div>`)
-  mask.querySelector('[data-act="close"]').addEventListener('click', close)
-  mask.addEventListener('mousedown', (e) => { if (e.target === mask) close() })
-}

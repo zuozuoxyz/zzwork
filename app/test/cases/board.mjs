@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict'
+import fs from 'node:fs'
+import path from 'node:path'
 import { startFakeAI, sleep } from '../harness.mjs'
+import { createTaskUI, selectTask } from './_helpers.mjs'
 
 const ctx = { ready: false, modelId: '', server: null }
+
+// 1x1 PNG，用于构造图片附件
+const PNG_1x1 = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='
+function att(n = 1) { return { name: 'shot' + n + '.png', mime: 'image/png', dataUrl: PNG_1x1, thumb: PNG_1x1, size: 71 } }
+function metaOf(m) { if (!m) return {}; if (typeof m.meta === 'object') return m.meta || {}; try { return JSON.parse(m.meta) } catch { return {} } }
 
 async function ensureAI(app) {
   if (ctx.ready) return
@@ -547,6 +555,142 @@ export default [
       await app.call(() => { document.querySelectorAll('.zz-modal-mask').forEach((x) => x.remove()); return true })
       await app.invoke('board', 'saveConfig', { model_id: ctx.modelId, agent_id: 'builtin', skillExclude: [], mcpExclude: [] })
       try { await server.close() } catch {}
+    }
+  },
+  {
+    name: '重复触发 start（连拖两次）只作答一次（防重复对话）',
+    async run(app) {
+      await ensureAI(app)
+      const card = await app.invoke('board', 'create', { title: '去重任务', content: '只应作答一次' })
+      // 并发触发两次 start，模拟快速连拖两次
+      const [r1, r2] = await Promise.all([
+        app.invoke('board', 'start', { id: card.id }),
+        app.invoke('board', 'start', { id: card.id })
+      ])
+      const runId = (r1 && r1.runId) || (r2 && r2.runId)
+      if (runId) await waitRun(app, runId)
+      await sleep(200)
+      const sess = await app.invoke('board', 'session', { id: card.id })
+      const msgs = await app.store('messages.list', { taskId: card.id, sessionId: sess.sessionId })
+      const userMsgs = msgs.filter((m) => m.role === 'user')
+      assert.equal(userMsgs.length, 1, '只应有一条首轮用户消息，实际 ' + userMsgs.length)
+      const asst = msgs.filter((m) => m.role === 'assistant' && String(m.content || '').includes('作答'))
+      assert.equal(asst.length, 1, '只应有一次作答，实际 ' + asst.length)
+    }
+  },
+  {
+    name: '看板卡片对话可发送图片附件',
+    async run(app) {
+      await ensureAI(app)
+      const card = await app.invoke('board', 'create', { title: '图片对话', content: '看图说话' })
+      const started = await app.invoke('board', 'start', { id: card.id })
+      if (started.runId) await waitRun(app, started.runId)
+      const sid = started.sessionId
+      const r = await app.invoke('board', 'send', { id: card.id, sessionId: sid, text: '看一下这张图', attachments: [att(1)] })
+      if (r && r.runId) await waitRun(app, r.runId)
+      const msgs = await app.store('messages.list', { taskId: card.id, sessionId: sid })
+      const imgMsg = msgs.find((m) => m.role === 'user' && String(m.content || '').includes('看一下这张图'))
+      assert.ok(imgMsg, '应找到带图追问消息')
+      const meta = metaOf(imgMsg)
+      assert.ok(Array.isArray(meta.attachments) && meta.attachments.length === 1, '消息应含 1 张图片附件')
+      assert.ok(meta.attachments[0].path, '图片应已落盘到 path')
+    }
+  },
+  {
+    name: '看板任务详情可附带图片，开始作答时一并发送',
+    async run(app) {
+      await ensureAI(app)
+      const card = await app.invoke('board', 'create', { title: '带图详情', content: '参照图片实现', attachments: [att(1), att(2)] })
+      const c = (await boardList(app)).find((x) => x.id === card.id)
+      assert.ok(c.meta && Array.isArray(c.meta.attachments) && c.meta.attachments.length === 2, 'meta 应存两张详情图，实际 ' + JSON.stringify(c.meta && c.meta.attachments && c.meta.attachments.length))
+      const started = await app.invoke('board', 'start', { id: card.id })
+      if (started.runId) await waitRun(app, started.runId)
+      const msgs = await app.store('messages.list', { taskId: card.id, sessionId: started.sessionId })
+      const first = msgs.find((m) => m.role === 'user')
+      const meta = metaOf(first)
+      assert.ok(Array.isArray(meta.attachments) && meta.attachments.length === 2, '首轮消息应携带 2 张详情图')
+      // 首轮发送后清掉 meta 里的大体积 dataUrl
+      const after = (await boardList(app)).find((x) => x.id === card.id)
+      assert.ok(!after.meta.attachments || after.meta.attachments.length === 0, '首轮后应清理 meta.attachments')
+    }
+  },
+  {
+    name: '看板工作目录文件在新 tab 打开（md 预览）',
+    async run(app) {
+      await ensureAI(app)
+      await app.click('.abi[data-view="projects"]')
+      const card = await app.invoke('board', 'create', { title: '文件卡片', content: '含文件' })
+      fs.mkdirSync(card.path, { recursive: true })
+      fs.writeFileSync(path.join(card.path, 'note.md'), '# 看板文件标题\n\n正文内容', 'utf8')
+      await app.store('tasks.update', { id: card.id, patch: { status: 'review' } })
+      await app.click('.abi[data-view="board"]')
+      await app.waitFor(() => !!document.querySelector('.boardcols'), 8000, '看板网格')
+      await app.waitFor(`!!document.querySelector('.bcard[data-card="${card.id}"]')`, 8000, '卡片渲染')
+      await app.call((id) => { const e = document.querySelector(`.bcard[data-card="${id}"]`); if (e) e.click(); return true }, card.id)
+      await app.waitFor(() => !!document.querySelector('#boardSideFiles .treebar'), 5000, '工作目录树出现')
+      await app.waitFor(`[...document.querySelectorAll('#boardSideFiles .fr')].some(e=>e.textContent.includes('note.md'))`, 8000, '文件行出现')
+      await app.call(() => { const r = [...document.querySelectorAll('#boardSideFiles .fr')].find((e) => e.textContent.includes('note.md')); if (r) r.click(); return true })
+      await app.waitFor(() => document.querySelector('#pane-file').classList.contains('on'), 8000, '文件 pane 打开')
+      assert.ok(await app.exists('#tabbar .tab[data-pane="file"]'), '应出现文件 tab')
+      await app.waitFor(`(() => { const p = document.querySelector('#pane-file'); return !!p && (p.textContent || '').includes('看板文件标题') })()`, 8000, 'md 预览渲染')
+      // 收尾：关闭文件与卡片 tab，回看板
+      await app.call(() => { const x = document.querySelector('#tabbar .tab[data-file] .x'); if (x) x.click(); return true })
+      await app.call((id) => { const t = document.querySelector(`#tabbar .tab[data-card="${id}"] .x`); if (t) t.click(); return true }, card.id)
+      await app.waitFor(() => document.querySelector('#pane-board').classList.contains('on'), 5000, '回到看板')
+    }
+  },
+  {
+    name: '看板工作目录 HTML 渲染预览并可切换到源码',
+    async run(app) {
+      await ensureAI(app)
+      // 关键复现条件：先选中一个普通项目任务，使 currentTaskPath 非空
+      // （历史上看板卡片 html 因不在该任务目录下而被误判为不可渲染，只显示源码）
+      await createTaskUI(app, { name: 'HTML 复现项目任务', type: 'work' })
+      await selectTask(app, 'HTML 复现项目任务')
+      const card = await app.invoke('board', 'create', { title: 'HTML 卡片', content: '含 html 文件' })
+      fs.mkdirSync(card.path, { recursive: true })
+      fs.writeFileSync(path.join(card.path, 'page.html'), '<!doctype html><html><body style="font-family:sans-serif"><h1>HTMLPREVIEW</h1></body></html>', 'utf8')
+      await app.store('tasks.update', { id: card.id, patch: { status: 'review' } })
+      await app.click('.abi[data-view="board"]')
+      await app.waitFor(() => !!document.querySelector('.boardcols'), 8000, '看板网格')
+      await app.waitFor(`!!document.querySelector('.bcard[data-card="${card.id}"]')`, 8000, '卡片渲染')
+      await app.call((id) => { const e = document.querySelector(`.bcard[data-card="${id}"]`); if (e) e.click(); return true }, card.id)
+      await app.waitFor(() => !!document.querySelector('#boardSideFiles .treebar'), 5000, '工作目录树出现')
+      await app.waitFor(`[...document.querySelectorAll('#boardSideFiles .fr')].some(e=>e.textContent.includes('page.html'))`, 8000, 'html 文件行出现')
+      await app.call(() => { const r = [...document.querySelectorAll('#boardSideFiles .fr')].find((e) => e.textContent.includes('page.html')); if (r) r.click(); return true })
+      // 应渲染预览（iframe），而不是回退到源码
+      await app.waitFor(() => { const p = document.querySelector('#previewHost'); return !!p && p.style.display !== 'none' && !!p.querySelector('#pvFrame') }, 8000, 'HTML 预览 iframe 出现')
+      // 可切换到源码：预览隐藏、编辑器显示
+      await app.call(() => { const b = document.querySelector('#previewHost [data-pv="toggle"]'); if (b) b.click(); return true })
+      await app.waitFor(() => { const p = document.querySelector('#previewHost'); return !!p && (p.style.display === 'none' || !p.querySelector('#pvFrame')) }, 8000, '切换到源码后隐藏预览')
+      // 收尾：关闭文件与卡片 tab，回看板
+      await app.call(() => { const x = document.querySelector('#tabbar .tab[data-file] .x'); if (x) x.click(); return true })
+      await app.call((id) => { const t = document.querySelector(`#tabbar .tab[data-card="${id}"] .x`); if (t) t.click(); return true }, card.id)
+      await app.waitFor(() => document.querySelector('#pane-board').classList.contains('on'), 5000, '回到看板')
+    }
+  },
+  {
+    name: '看板对话中的链接不会导航主窗口（不再覆盖整个应用）',
+    async run(app) {
+      await ensureAI(app)
+      const card = await app.invoke('board', 'create', { title: '链接卡片', content: '含链接' })
+      const sess = await app.invoke('board', 'session', { id: card.id })
+      await app.store('messages.add', { taskId: card.id, role: 'assistant', content: '请查看 [这个页面](foo.html) 的说明。', opts: { sessionId: sess.sessionId } })
+      await app.store('tasks.update', { id: card.id, patch: { status: 'review' } })
+      await app.click('.abi[data-view="board"]')
+      await app.waitFor(() => !!document.querySelector('.boardcols'), 8000, '看板网格')
+      await app.waitFor(`!!document.querySelector('.bcard[data-card="${card.id}"]')`, 8000, '卡片渲染')
+      await app.call((id) => { const e = document.querySelector(`.bcard[data-card="${id}"]`); if (e) e.click(); return true }, card.id)
+      await app.waitFor(`[...document.querySelectorAll('#bcMsgs a[href]')].length >= 1`, 8000, '对话内出现链接')
+      const before = await app.call(() => location.href)
+      await app.call(() => { const a = document.querySelector('#bcMsgs a[href]'); if (a) a.click(); return true })
+      await sleep(400)
+      const after = await app.call(() => location.href)
+      assert.equal(after, before, '点击对话内链接不应导航主窗口')
+      assert.ok(await app.exists('#bcMsgs'), '应用界面应仍在')
+      // 收尾：关闭卡片标签回看板
+      await app.call((id) => { const t = document.querySelector(`#tabbar .tab[data-card="${id}"] .x`); if (t) t.click(); return true }, card.id)
+      await app.waitFor(() => document.querySelector('#pane-board').classList.contains('on'), 5000, '回到看板')
     }
   },
   {

@@ -7,6 +7,8 @@ const chat = require('./chat')
 
 // taskId -> 当前进行中的 runId（用于手动停止；重启后由 resumeAll 重新填充）
 const activeRuns = new Map()
+// taskId -> 启动流程进行中标记（防重复拖动/点击触发多次作答）
+const starting = new Set()
 
 function workRoot() {
   const S = getStore()
@@ -31,6 +33,20 @@ function uniquePath(base, S) {
 
 function readMeta(task) {
   try { return JSON.parse(task.meta || '{}') || {} } catch { return {} }
+}
+
+// 只保留图片附件必要字段，避免渲染层塞入无关数据落库
+function sanitizeAtts(list) {
+  if (!Array.isArray(list)) return []
+  return list.slice(0, 12).map((a) => {
+    const o = a || {}
+    const dataUrl = String(o.dataUrl || '')
+    if (!/^data:image\//.test(dataUrl)) return null
+    return {
+      name: String(o.name || '图片'), mime: String(o.mime || ''),
+      dataUrl, thumb: String(o.thumb || dataUrl), size: Number(o.size) || 0
+    }
+  }).filter(Boolean)
 }
 
 function readConfig() {
@@ -86,7 +102,7 @@ function create(p) {
   const target = uniquePath(path.join(boardDir(), safeName(title)), S)
   return S.createTask({
     name: title, type: 'work', scope: 'board', status: 'todo', path: target,
-    agentId: 'builtin', meta: { content }
+    agentId: 'builtin', meta: { content, attachments: sanitizeAtts(p && p.attachments) }
   })
 }
 
@@ -96,7 +112,12 @@ function update(p) {
   if (!task) throw new Error('卡片不存在')
   const patch = {}
   if (p.title !== undefined) patch.name = String(p.title).trim() || task.name
-  if (p.content !== undefined) patch.meta = JSON.stringify({ ...readMeta(task), content: String(p.content) })
+  if (p.content !== undefined || p.attachments !== undefined) {
+    const meta = readMeta(task)
+    if (p.content !== undefined) meta.content = String(p.content)
+    if (p.attachments !== undefined) meta.attachments = sanitizeAtts(p.attachments)
+    patch.meta = JSON.stringify(meta)
+  }
   return S.updateTask(task.id, patch)
 }
 
@@ -109,32 +130,49 @@ async function start(p) {
   const S = getStore()
   const task = S.getTask(p && p.id)
   if (!task) throw new Error('卡片不存在')
-  const cfg = readConfig()
-  try { fs.mkdirSync(task.path, { recursive: true }) } catch {}
-  const patch = { status: 'doing' }
-  const agentId = p.agent_id !== undefined ? p.agent_id : cfg.agent_id
-  if (agentId) patch.agent_id = agentId
-  const modelId = p.model_id !== undefined ? p.model_id : cfg.model_id
-  if (modelId) patch.model_id = modelId
-  S.updateTask(task.id, patch)
-  applyExclusions(S, task.id, cfg)
-
-  const session = S.ensureSession(task.id)
-  const msgs = S.listMessages(task.id, session.id)
-  let runId = ''
-  if (!msgs.length) {
-    const content = readMeta(task).content || ''
-    const r = await chat.send({
-      taskId: task.id, sessionId: session.id, text: `【任务】${task.name}\n【内容】${content}`,
-      onFinish: ({ status }) => {
-        if (status === 'done') toReview(task.id)
-        if (activeRuns.get(task.id) === runId) activeRuns.delete(task.id)
-      }
-    })
-    runId = (r && r.runId) || ''
-    if (runId) activeRuns.set(task.id, runId)
+  // 已在启动中（并发/连拖）：忽略重复触发，避免同一卡片跑出两次作答、对话重复
+  if (starting.has(task.id)) return { ok: false, busy: true, taskId: task.id, sessionId: S.ensureSession(task.id).id }
+  // 已是进行中：视为重复启动（首轮消息可能尚未落库），直接返回现有会话/运行，不再发一轮
+  if (task.status === 'doing') {
+    const s = S.ensureSession(task.id)
+    return { ok: true, taskId: task.id, sessionId: s.id, runId: activeRuns.get(task.id) || '', already: true }
   }
-  return { ok: true, taskId: task.id, sessionId: session.id, runId }
+  starting.add(task.id)
+  try {
+    const cfg = readConfig()
+    try { fs.mkdirSync(task.path, { recursive: true }) } catch {}
+    const patch = { status: 'doing' }
+    const agentId = p.agent_id !== undefined ? p.agent_id : cfg.agent_id
+    if (agentId) patch.agent_id = agentId
+    const modelId = p.model_id !== undefined ? p.model_id : cfg.model_id
+    if (modelId) patch.model_id = modelId
+    S.updateTask(task.id, patch)
+    applyExclusions(S, task.id, cfg)
+
+    const session = S.ensureSession(task.id)
+    const msgs = S.listMessages(task.id, session.id)
+    let runId = ''
+    if (!msgs.length) {
+      const meta = readMeta(task)
+      const content = meta.content || ''
+      const detAtts = Array.isArray(meta.attachments) ? meta.attachments : []
+      const r = await chat.send({
+        taskId: task.id, sessionId: session.id, text: `【任务】${task.name}\n【内容】${content}`,
+        attachments: detAtts,
+        onFinish: ({ status }) => {
+          if (status === 'done') toReview(task.id)
+          if (activeRuns.get(task.id) === runId) activeRuns.delete(task.id)
+        }
+      })
+      runId = (r && r.runId) || ''
+      if (runId) activeRuns.set(task.id, runId)
+      // 首轮已把详情图片随消息持久化到上传目录，清掉 meta 里的大体积 dataUrl
+      if (detAtts.length) { try { S.updateTask(task.id, { meta: JSON.stringify({ ...meta, attachments: [] }) }) } catch {} }
+    }
+    return { ok: true, taskId: task.id, sessionId: session.id, runId }
+  } finally {
+    starting.delete(task.id)
+  }
 }
 
 // 进行中卡片的追问：先回到进行中，作答成功后再落到待审核
@@ -146,6 +184,7 @@ async function sendMessage(p) {
   let runId = ''
   const r = await chat.send({
     taskId: task.id, sessionId: p.sessionId, text: p.text,
+    attachments: Array.isArray(p.attachments) ? p.attachments : [],
     onFinish: ({ status }) => {
       if (status === 'done') toReview(task.id)
       if (activeRuns.get(task.id) === runId) activeRuns.delete(task.id)

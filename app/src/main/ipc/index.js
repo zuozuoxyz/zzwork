@@ -12,6 +12,7 @@ const terminal = require('../services/terminal')
 const lsp = require('../services/lsp')
 const featuremap = require('../services/featuremap')
 const update = require('../services/update')
+const share = require('../services/share')
 const { clipboard, nativeImage, protocol } = require('electron')
 
 function registerAll(ipcMain, getWin) {
@@ -29,6 +30,7 @@ function registerAll(ipcMain, getWin) {
   lsp.register(ipcMain)
   featuremap.register(ipcMain)
   update.register(ipcMain)
+  share.register(ipcMain)
   // 复制聊天里的图片到系统剪贴板
   ipcMain.handle('zz:app:copyImage', (_e, p) => {
     const url = String((p && p.dataUrl) || '')

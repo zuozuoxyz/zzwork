@@ -9,7 +9,7 @@ const secrets = require('./secrets')
 const changes = require('./changes')
 const remotefs = require('./remotefs')
 const sessionFiles = require('./sessionFiles')
-const { taskJoin, readTextFile, writeTaskTextFile } = require('./taskfiles')
+const { taskJoin, readTextFile, writeTaskTextFile, listTaskDir } = require('./taskfiles')
 
 const runs = new Map()
 // 后台 shell（Claude run_in_background 启动的常驻命令）：按会话归集，随会话 meta 持久化
@@ -228,6 +228,7 @@ async function envAgentIds(S, env, { blocking = true } = {}) {
 function agentUsable(agent, available) {
   if (!agent) return false
   if (agent.kind === 'builtin') return true
+  if (agent.kind === 'external') return true
   const known = KNOWN_AGENT_BY_ID.get(agent.id)
   if (!known || !available) return true
   const cmd = String(agent.cmd || '').trim()
@@ -254,7 +255,7 @@ async function pickAgentModel(S, task, session, opts = {}) {
     if (agentUsable(a, available)) { agent = a; break }
   }
   if (!agent) {
-    agent = usableAgents.find((a) => a.kind !== 'builtin')
+    agent = usableAgents.find((a) => a.kind === 'cli')
       || usableAgents.find((a) => a.kind === 'builtin')
       || agents.find((a) => a.kind === 'builtin')
       || FALLBACK_AGENT
@@ -269,7 +270,7 @@ async function pickAgentModel(S, task, session, opts = {}) {
     if (configured && agentUsable(configured, available)) {
       agent = configured
     } else if (agent.kind === 'builtin') {
-      const cli = usableAgents.find((a) => a.kind !== 'builtin')
+      const cli = usableAgents.find((a) => a.kind === 'cli')
       if (cli) agent = cli
     }
   }
@@ -792,7 +793,52 @@ async function processRun({ runId, entry, task, session, agent, model, env: envI
   post2({ type: 'user', text: userText, messageId: mid, attachments: saved })
 
   if (agent.kind === 'builtin') runBuiltin({ runId, task, session, agent, model, changes: ch, env, turnStart, prompt: userText, attachments: savedFull, depth })
+  else if (agent.kind === 'external') runExternal({ runId, task, session, agent, prompt: userText })
   else runCli({ runId, task, session, agent, changes: ch, prompt: userText, env, turnStart, attachments: savedFull, depth })
+}
+
+// 外部执行体：把本任务的提问转发到远端被分享任务，用远端隐藏会话作答后回填到本地对话
+async function runExternal({ runId, task, session, agent, prompt }) {
+  const S = getStore()
+  const post2 = (o) => post({ taskId: task.id, sessionId: session.id, runId, ...o })
+  let answer = ''
+  let err = ''
+  const pl = require('../../core/shareLink').parseShareLink(agent && agent.link)
+  if (!pl) err = '外部执行体链接无效'
+  else {
+    try {
+      const r = await fetch(pl.base + '/s/' + pl.token + '/ask', {
+        method: 'POST',
+        headers: { 'x-zzwork-share': '1', 'content-type': 'application/json' },
+        body: JSON.stringify({ question: prompt, fromTask: task.name })
+      })
+      const j = await r.json().catch(() => ({}))
+      if (!r.ok || !j.ok) throw new Error(j.error || ('远端返回 HTTP ' + r.status))
+      answer = String(j.answer || '（远端无内容）')
+    } catch (e) { err = String((e && e.message) || e) }
+  }
+  if (err) {
+    const content = '远程执行体调用失败：' + err
+    const mid = S.addMessage(task.id, 'assistant', content, { sessionId: session.id, kind: 'error', runId, meta: { status: 'error' } })
+    post2({ type: 'done', content, messageId: mid, error: err })
+    finishRun(runId, 'error', '')
+    return
+  }
+  // 远端一次性返回，这里分段回填以复用前端的增量渲染观感
+  try {
+    const step = Math.max(1, Math.ceil(answer.length / 40))
+    for (let i = 0; i < answer.length; i += step) {
+      post2({ type: 'delta', text: answer.slice(i, i + step) })
+      await new Promise((res) => setTimeout(res, 15))
+    }
+  } catch {}
+  const mid = S.addMessage(task.id, 'assistant', answer, {
+    sessionId: session.id, kind: 'text', runId, meta: { agentId: agent.id, agentName: agent.name }
+  })
+  appendChatFile(task, 'assistant', answer, { sessionTitle: session.title })
+  post2({ type: 'done', content: answer, messageId: mid })
+  finishRun(runId, 'done', answer)
+  scheduleAfterTurn(task.id, session.id)
 }
 
 // 回合结束后的文件差异卡片：对话后展示本次改动的文件与 diff
@@ -870,6 +916,8 @@ function featureNetSummary(map) {
 // 稳定 system：只放跨轮基本不变的内容（基座/简介/功能网络/记忆/关键信息/摘要/会话提示词）。
 // 易变内容（看板、工作区变更、跨任务清单）不进来，避免把 system 尾部的缓存打穿。
 async function buildSystem(S, task, session) {
+  // 远程分享问答会话：不注入关键信息/会话提示词/记忆，避免密钥与私密内容随远端问答外泄
+  const remote = parseMeta(session && session.meta).remote === true
   const parts = [`你是 zzwork 工作助手，当前任务「${task.name}」（类型 ${task.type}）。回答简洁实用。`]
   if (task.brief) parts.push('【任务简介】\n' + task.brief)
   if (task.type === 'code') {
@@ -879,13 +927,17 @@ async function buildSystem(S, task, session) {
       if (net) parts.push('【功能网络】\n' + net + '\n（改动代码时请对齐这些功能及其数据来源/存储；如需调整功能网络，直接说明即可）')
     } catch {}
   }
-  const mem = await readMemory(task)
-  if (mem) parts.push('【任务记忆】\n' + mem)
-  const keyinfo = await readKeyInfo(task)
-  if (keyinfo) parts.push('【关键信息】\n' + keyinfo)
+  if (!remote) {
+    const mem = await readMemory(task)
+    if (mem) parts.push('【任务记忆】\n' + mem)
+    const keyinfo = await readKeyInfo(task)
+    if (keyinfo) parts.push('【关键信息】\n' + keyinfo)
+  }
   if (session.summary) parts.push('【会话摘要】\n' + session.summary)
-  const prompt = S.getSetting('session:prompt:' + task.id, '')
-  if (prompt) parts.push('【本次会话提示词】\n' + prompt)
+  if (!remote) {
+    const prompt = S.getSetting('session:prompt:' + task.id, '')
+    if (prompt) parts.push('【本次会话提示词】\n' + prompt)
+  }
   return parts.join('\n\n')
 }
 
@@ -1076,6 +1128,49 @@ async function askTask({ fromTaskId, targetTaskId, targetName, question, depth =
     } catch { done('') }
   })
   return { ok: true, task: target.name, q: question, answer }
+}
+
+// 远程分享问答：始终用一个标记为 remote 的隐藏会话作答，强制 builtin（不让远端输入驱动 CLI/代码执行）
+function ensureRemoteAskSession(S, target) {
+  S.ensureSession(target.id)
+  const list = S.listSessions(target.id).filter((s) => s.kind === 'ask' && parseMeta(s.meta).remote === true)
+  if (list.length) return list[0]
+  return S.createSession({ taskId: target.id, kind: 'ask', title: '远程分享问答', agentId: 'builtin', modelId: '', meta: { remote: true } })
+}
+
+// 注入被分享任务的工作区顶层文件树（仅名称），让远端模型有基本上下文
+async function remoteFileTree(task) {
+  if (!task || !task.path) return ''
+  try {
+    const list = await listTaskDir(task.path)
+    if (!list.length) return ''
+    const lines = list.slice(0, 80).map((x) => (x.dir ? '[目录] ' : '') + x.name)
+    return '【工作区文件（顶层，仅名称）】\n' + lines.join('\n')
+  } catch { return '' }
+}
+
+async function askRemote(taskId, question, fromLabel) {
+  const S = getStore()
+  const target = S.getTask(taskId)
+  if (!target) return { ok: false, error: '任务不存在' }
+  if ((target.scope || 'long') === 'board') return { ok: false, error: '该任务不支持远程问答' }
+  const ask = ensureRemoteAskSession(S, target)
+  const tree = await remoteFileTree(target)
+  const text = `【远程只读询问 · 来自任务「${fromLabel || '外部任务'}」】\n`
+    + '请只依据任务已知信息与下方工作区内容简洁作答；不要修改任何文件、不要执行有副作用的操作，也不要使用 @@ASK 协议。\n\n'
+    + `问题：\n${question}` + (tree ? `\n\n${tree}` : '')
+  const answer = await new Promise((resolve) => {
+    let settled = false
+    let timer = null
+    const done = (v) => { if (settled) return; settled = true; if (timer) clearTimeout(timer); resolve(String(v || '')) }
+    timer = setTimeout(() => done('（远端作答超时）'), 120000)
+    try {
+      send({ taskId: target.id, sessionId: ask.id, text, depth: ASK_MAX_DEPTH, onFinish: (r) => done(r && r.result) })
+        .then((x) => { if (!x || !x.runId) done('') })
+        .catch(() => done(''))
+    } catch { done('') }
+  })
+  return { ok: true, answer }
 }
 
 async function runBuiltin({ runId, task, session, agent, model, changes: ch, env, turnStart, attachments, depth = 0 }) {
@@ -1933,6 +2028,7 @@ module.exports = {
   refreshGroupBrief,
   spawnSubagent,
   orchestrate,
+  askRemote,
   // 供 featuremap 等辅助服务复用（避免重复实现模型/事件逻辑）
   post,
   auxStart,

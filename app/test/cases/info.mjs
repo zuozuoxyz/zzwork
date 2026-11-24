@@ -193,6 +193,29 @@ export default [
     }
   },
   {
+    name: '任务类型可在任务信息中切换 work/code',
+    async run(app) {
+      const t0 = await ensureTask(app, '主任务改名')
+      await selectTask(app, '主任务改名')
+      assert.ok(await app.exists('#typeSel'), '类型选择器应存在')
+      await app.waitFor(`(() => { const s = document.querySelector('#typeSel'); return !!s && [...s.options].some((o) => o.value === 'work') && [...s.options].some((o) => o.value === 'code') })()`, 5000, '类型选项含 work/code')
+      await app.selectValue('#typeSel', 'code')
+      await app.waitFor(`(async () => {
+        const ts = await window.zzwork.invoke('store', 'tasks.list')
+        const x = ts.find((v) => v.id === ${JSON.stringify(t0.id)})
+        return !!(x && x.type === 'code')
+      })()`, 8000, '类型已保存 code')
+      await app.waitFor(`(() => { const s = document.querySelector('#typeSel'); return !!s && s.value === 'code' && s.classList.contains('ty-code') })()`, 8000, '类型选择器回显 code')
+      // 切回 work，避免影响后续用例（收件箱按类型分流）
+      await app.selectValue('#typeSel', 'work')
+      await app.waitFor(`(async () => {
+        const ts = await window.zzwork.invoke('store', 'tasks.list')
+        const x = ts.find((v) => v.id === ${JSON.stringify(t0.id)})
+        return !!(x && x.type === 'work')
+      })()`, 8000, '类型恢复 work')
+    }
+  },
+  {
     name: '状态栏任务与 TODO 进度',
     async run(app) {
       await ensureTask(app, '主任务改名')

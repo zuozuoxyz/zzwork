@@ -164,6 +164,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
 #zzv .pill-sel.st-active { background-color: rgba(52,211,153,.13); border-color: rgba(52,211,153,.3); color: #6ee7b7 }
 #zzv .pill-sel.st-paused { background-color: rgba(250,204,21,.13); border-color: rgba(250,204,21,.32); color: #fde68a }
 #zzv .pill-sel.st-done { background-color: rgba(148,163,184,.16); border-color: rgba(148,163,184,.34); color: #cbd5e1 }
+#zzv .pill-sel.ty-work { background-color: rgba(14,165,233,.15); border-color: rgba(14,165,233,.32); color: #7dd3fc }
+#zzv .pill-sel.ty-code { background-color: rgba(168,85,247,.15); border-color: rgba(168,85,247,.32); color: #c4b5fd }
 #zzv .pth { color: var(--faint); font-size: 11px; margin-bottom: 16px; word-break: break-all }
 #zzv .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; max-width: 720px; margin-bottom: 6px }
 #zzv .cell { background: var(--card); border: 1px solid var(--bd); border-radius: 6px; padding: 8px 11px; min-width: 0 }
@@ -371,6 +373,28 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
 #zzv .bd-tools { display: flex; align-items: center; gap: 2px; padding: 5px 8px; border-bottom: 1px solid var(--bd); flex-wrap: wrap; flex: 0 0 auto }
 #zzv .bd-tools .sp { flex: 1 }
 #zzv .bd-sep { width: 1px; height: 16px; background: var(--bd2); margin: 0 3px }
+/* 左侧竖向浮动工具栏（飞书白板风格） */
+#zzv .bd-rail { position: absolute; left: 12px; top: 50%; transform: translateY(-50%); z-index: 6;
+  background: rgba(20,21,21,.82); border: 1px solid var(--bd); border-radius: 11px; padding: 5px;
+  backdrop-filter: blur(6px); box-shadow: 0 3px 12px rgba(0,0,0,.35) }
+#zzv .bd-rail .bd-tools { flex-direction: column; flex-wrap: nowrap; align-items: center; gap: 2px; border: 0; padding: 0 }
+#zzv .bd-rail .ib { width: 32px; height: 32px }
+#zzv .bd-titlechip { position: absolute; left: 12px; top: 12px; z-index: 6; max-width: 40%;
+  font-size: 11.5px; color: var(--dim); background: rgba(20,21,21,.62); padding: 3px 9px; border-radius: 7px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border: 1px solid var(--bd) }
+#zzv .bd-zoom { position: absolute; right: 12px; bottom: 12px; z-index: 6; display: flex; gap: 2px;
+  background: rgba(20,21,21,.82); border: 1px solid var(--bd); border-radius: 11px; padding: 4px; backdrop-filter: blur(6px) }
+/* 选中后浮动工具条 */
+#zzv .bd-float { position: absolute; z-index: 7; display: flex; align-items: center; gap: 2px;
+  background: rgba(28,30,32,.96); border: 1px solid var(--bd2); border-radius: 10px; padding: 4px;
+  box-shadow: 0 5px 16px rgba(0,0,0,.42); transform: translateX(-50%) }
+#zzv .bd-float.hidden { display: none }
+#zzv .bd-float .ib { width: 28px; height: 28px }
+#zzv .bd-sw { display: flex; gap: 3px; padding: 0 4px; margin-right: 1px; border-right: 1px solid var(--bd2) }
+#zzv .bd-dot { width: 15px; height: 15px; border-radius: 50%; border: 1px solid rgba(0,0,0,.45); cursor: pointer; padding: 0 }
+#zzv .bd-dot:hover { transform: scale(1.15) }
+#zzv .bd-anchor.act { fill: #fff; stroke: var(--accent); stroke-width: 1.5 }
+#zzv .bd-ehandle { fill: var(--accent); stroke: #0b0e14; stroke-width: 1.4; pointer-events: none }
 #zzv .bd-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   color: var(--faint); font-size: 11.5px; text-align: center; padding: 20px; pointer-events: none; line-height: 1.8 }
 #zzv .bd-badge { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 11px; border-radius: 12px;
@@ -389,6 +413,13 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
 #zzv .bd-fo.sel { outline: 2px solid var(--accent); outline-offset: -1px }
 #zzv .bd-textarea { position: absolute; z-index: 6; background: var(--card); color: var(--fg); border: 1px solid var(--accent);
   border-radius: 5px; padding: 4px 6px; font-size: 12px; font-family: inherit; line-height: 1.4; resize: none; outline: none; min-height: 54px }
+#zzv .bd-textarea.ml { min-height: 34px; white-space: pre-wrap }
+#zzv .bd-edge { pointer-events: none }
+#zzv .bd-edge.edsel { filter: drop-shadow(0 0 3px rgba(56,139,253,.55)) }
+#zzv .bd-anchor { fill: var(--accent); stroke: #0b0e14; stroke-width: 1; pointer-events: none; opacity: .95 }
+#zzv .bd-handle { fill: var(--card); stroke: var(--accent); stroke-width: 1.4; pointer-events: none }
+#zzv .bd-marquee { fill: rgba(56,139,253,.08); stroke: var(--accent); stroke-dasharray: 4 3 }
+#zzv .bd-arrow-preview { stroke: var(--accent); stroke-dasharray: 4 3; fill: none }
 #zzv .aiwrap { display: flex; height: 100% }
 #zzv .chatcol { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; height: 100% }
 #zzv .ctop { display: flex; align-items: center; gap: 9px; padding: 7px 14px; border-bottom: 1px solid var(--bd);
@@ -402,7 +433,9 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
 #zzv .bub { max-width: 78%; padding: 8px 13px; border-radius: 14px; background: rgba(14,165,233,.14);
   border: 1px solid rgba(96,165,250,.22); border-bottom-right-radius: 5px; font-size: 12.5px; line-height: 1.65;
   white-space: pre-wrap; word-break: break-word; color: var(--fg) }
-#zzv .msg.u .ubatt { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; max-width: 78%; justify-content: flex-end }
+#zzv .msg.u .ubatt, #zzv .bmsg.u .ubatt { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; max-width: 78%; justify-content: flex-end }
+#zzv .bmsg.u .ubatt { max-width: 100% }
+#zzv .cardbrief .ubatt { justify-content: flex-start; max-width: 100%; margin-top: 8px }
 #zzv .ubatt .uimg { width: 120px; max-height: 120px; object-fit: cover; border-radius: 8px; border: 1px solid var(--bd2); cursor: zoom-in }
 #zzv .msg.a { gap: 3px }
 #zzv .parts { display: flex; flex-direction: column; gap: 7px; min-width: 0 }
@@ -482,6 +515,9 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
 #zzv .attchip img { width: 100%; height: 100%; object-fit: cover; display: block }
 #zzv .attx { position: absolute; top: 2px; right: 2px; width: 16px; height: 16px; border-radius: 50%;
   border: 0; background: rgba(0,0,0,.62); color: #fff; font-size: 11px; line-height: 16px; cursor: pointer; padding: 0 }
+/* 看板卡片对话 / 任务详情：附件条铺满并左对齐，贴合全宽输入区与弹窗 */
+#zzv #cardChat .attstrip { max-width: none; margin: 0 0 8px }
+#zzv .bmodal .attstrip { max-width: none; margin: 8px 0 0 }
 /* 后台 Shell 面板（每会话独立） */
 #zzv .shellpanel { display: none; max-width: 680px; margin: 0 auto 8px; border: 1px solid var(--bd);
   background: var(--card); border-radius: 8px; padding: 6px 9px 7px }
@@ -649,3 +685,25 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
 #zzv .filetoolbar { position: absolute; top: 0; right: 0; z-index: 5; display: flex; gap: 6px;
   padding: 6px 10px; background: linear-gradient(180deg, var(--bg), transparent) }
 #zzv .dirty { color: var(--warn); font-size: 11px }
+
+/* 任务分享 / 远程执行体 */
+#zzv .sharecell { border: 1px solid var(--bd); border-radius: 7px; padding: 9px 11px; margin: 8px 0 2px;
+  display: flex; flex-direction: column; gap: 7px; background: var(--card) }
+#zzv .sharehint { font-size: 10.5px; color: var(--faint) }
+#zzv .sharerow { display: flex; align-items: center; gap: 6px; flex-wrap: wrap }
+#zzv .sharerow .ftxt { flex: 1; min-width: 120px }
+#zzv .sharerow .shname { flex: 0 0 120px }
+#zzv .sharesep { height: 1px; background: var(--bd); margin: 1px 0 }
+#zzv .zz-remote .rb-name { color: var(--faint); font-size: 12px; margin-left: 4px }
+#zzv .zz-remote .rb-crumb { font-size: 11px; color: var(--dim); font-family: var(--mono, monospace);
+  padding: 2px 0 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap }
+#zzv .zz-remote .rb-list { max-height: 46vh; overflow: auto; border: 1px solid var(--bd); border-radius: 6px;
+  background: var(--bg); padding: 4px }
+#zzv .zz-remote .rb-row { padding: 4px 8px; border-radius: 4px; font-size: 12.5px; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis }
+#zzv .zz-remote .rb-row:hover { background: rgba(255,255,255,.07) }
+#zzv .zz-remote .rb-row.dir { color: var(--fg) }
+#zzv .zz-remote .rb-empty { padding: 10px; font-size: 12px; color: var(--faint); text-align: center }
+#zzv .zz-remote .rb-content { max-height: 42vh; overflow: auto; margin: 8px 0 0; padding: 10px 12px;
+  background: var(--bg); border: 1px solid var(--bd); border-radius: 6px; font-family: var(--mono, monospace);
+  font-size: 12px; line-height: 1.55; color: var(--fg); white-space: pre-wrap; word-break: break-word }

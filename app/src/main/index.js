@@ -58,6 +58,14 @@ if (!app.requestSingleInstanceLock()) {
       if (/^https?:/.test(url)) shell.openExternal(url)
       return { action: 'deny' }
     })
+    // 拦截主窗口被页面内链接改导航：外部链接交给系统浏览器，其余一律阻止，
+    // 避免 AI 对话里的链接（如 html 链接）把整个应用导航走、覆盖界面导致无法操作
+    win.webContents.on('will-navigate', (e, url) => {
+      const devUrl = process.env.ELECTRON_RENDERER_URL
+      if (devUrl && url.startsWith(devUrl)) return
+      e.preventDefault()
+      if (/^https?:/i.test(url)) shell.openExternal(url)
+    })
     if (process.env.ELECTRON_RENDERER_URL) {
       win.loadURL(process.env.ELECTRON_RENDERER_URL)
     } else {
@@ -72,6 +80,10 @@ if (!app.requestSingleInstanceLock()) {
     try {
       require('./services/board').resumeAll().catch((e) => console.error('[zzwork] 看板自动恢复失败：' + e.message))
     } catch (e) { console.error('[zzwork] 看板自动恢复异常：' + e.message) }
+    // 已启用的任务分享：启动后在后台起 HTTP 服务（自带隧道由用户另行暴露）
+    try {
+      require('./services/share').startAll().catch((e) => console.error('[zzwork] 分享服务启动失败：' + e.message))
+    } catch (e) { console.error('[zzwork] 分享服务启动异常：' + e.message) }
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow()
     })
@@ -80,6 +92,7 @@ if (!app.requestSingleInstanceLock()) {
   app.on('before-quit', () => {
     try { require('./services/terminal').killAll() } catch {}
     try { require('./services/lsp').disposeAll() } catch {}
+    try { require('./services/share').stopAll() } catch {}
   })
 
   app.on('window-all-closed', () => {

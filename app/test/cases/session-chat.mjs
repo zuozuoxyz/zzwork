@@ -591,6 +591,89 @@ export default [
     }
   },
   {
+    name: '画板：双击输入文字、悬停锚点连线、删除连线',
+    async run(app) {
+      const t = await taskByName(app, '主任务改名')
+      await selectTask(app, '主任务改名')
+      await app.click('.tab[data-pane="session"]')
+      await app.waitFor(`(() => { const b = document.querySelector('#boardHost'); return !!b && !b.classList.contains('hidden') })()`, 5000, '画板面板显示')
+      await sleep(900)
+      await app.click('#bdClear')
+      await sleep(900)
+
+      // 画两个矩形：飞书式——画框不再自动弹输入框
+      const drew = await app.call(() => {
+        const c = document.querySelector('#bdSvg')
+        c.setPointerCapture = () => {}
+        const r = c.getBoundingClientRect()
+        const ev = (type, x, y) => c.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 1, button: 0, clientX: r.left + x, clientY: r.top + y }))
+        const draw = (x1, y1, x2, y2) => { ev('pointerdown', x1, y1); ev('pointermove', x2, y2); ev('pointerup', x2, y2) }
+        const tool = (n) => document.querySelector('#boardHost [data-tool="' + n + '"]').click()
+        tool('rect'); draw(30, 30, 150, 110)
+        tool('rect'); draw(240, 200, 360, 280)
+        return { editorAfterDraw: !!document.querySelector('.bd-textarea'), shapes: document.querySelectorAll('#bdSvg .bd-shape').length }
+      })
+      assert.equal(drew.editorAfterDraw, false, '画框不应自动弹输入框')
+      assert.ok(drew.shapes >= 2, '应画出两个矩形')
+
+      // 双击第一个矩形进入文字编辑并提交
+      const edited = await app.call(() => {
+        const c = document.querySelector('#bdSvg')
+        c.setPointerCapture = () => {}
+        const r = c.getBoundingClientRect()
+        document.querySelector('#boardHost [data-tool="select"]').click()
+        c.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, clientX: r.left + 90, clientY: r.top + 70 }))
+        const ta = document.querySelector('.bd-textarea')
+        if (!ta) return false
+        ta.value = '框A'
+        ta.dispatchEvent(new Event('blur'))
+        return true
+      })
+      assert.ok(edited, '双击矩形应进入文字编辑')
+
+      // 悬停第一个矩形右锚点，直接拖到第二个矩形建立连线（无需切换箭头工具）
+      await app.call(() => {
+        const c = document.querySelector('#bdSvg')
+        c.setPointerCapture = () => {}
+        const r = c.getBoundingClientRect()
+        const ev = (type, x, y) => c.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 2, button: 0, clientX: r.left + x, clientY: r.top + y }))
+        document.querySelector('#boardHost [data-tool="select"]').click()
+        ev('pointermove', 150, 70)   // 悬停到右锚点
+        ev('pointerdown', 150, 70)   // 从锚点拖出连线
+        ev('pointermove', 300, 240)
+        ev('pointerup', 300, 240)
+        return true
+      })
+
+      await app.waitFor(`(async () => {
+        const raw = await window.zzwork.invoke('store', 'settings.get', { key: ${JSON.stringify('session:canvas:' + t.id)}, dflt: '' })
+        if (!raw) return false
+        try { const d = JSON.parse(raw); return d.shapes.length >= 2 && d.edges.length >= 1 && d.shapes.some((s) => s.text === '框A') } catch { return false }
+      })()`, 6000, '画板：两框一连线且含文字')
+
+      // 点击连线路径中点选中，再删除
+      const picked = await app.call(() => {
+        const c = document.querySelector('#bdSvg')
+        const path = document.querySelector('#bdSvg .bd-edge')
+        if (!c || !path || !path.getTotalLength) return false
+        c.setPointerCapture = () => {}
+        const r = c.getBoundingClientRect()
+        const pt = path.getPointAtLength(path.getTotalLength() / 2)
+        document.querySelector('#boardHost [data-tool="select"]').click()
+        const ev = (type) => c.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 3, button: 0, clientX: r.left + pt.x, clientY: r.top + pt.y }))
+        ev('pointerdown'); ev('pointerup')
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }))
+        return true
+      })
+      assert.ok(picked, '应能选中并删除连线')
+
+      await app.waitFor(`(async () => {
+        const raw = await window.zzwork.invoke('store', 'settings.get', { key: ${JSON.stringify('session:canvas:' + t.id)}, dflt: '' })
+        try { const d = raw ? JSON.parse(raw) : { edges: [] }; return (d.edges || []).length === 0 } catch { return false }
+      })()`, 6000, '画板：删除连线')
+    }
+  },
+  {
     name: '对话后显示本次修改与 diff',
     async run(app) {
       const agents = JSON.parse(await app.store('settings.get', { key: 'agents', dflt: '[]' }))

@@ -143,6 +143,42 @@ export default [
     }
   },
   {
+    name: '终端展开状态按任务独立',
+    async run(app) {
+      await ensureTask(app, '展开甲', { type: 'work' })
+      await ensureTask(app, '展开乙', { type: 'work' })
+      const isOn = () => app.call(() => document.querySelector('.term-panel').classList.contains('on'))
+
+      // 甲：确保收起后再展开
+      await selectTask(app, '展开甲')
+      if (await isOn()) {
+        await app.click('#termToggle')
+        await app.waitFor(`!document.querySelector('.term-panel').classList.contains('on')`, 6000, '甲收起')
+      }
+      await openPanel(app)
+      await ensureXterm(app)
+      const jia = (await app.store('tasks.list')).find((t) => t.name === '展开甲')
+      await app.waitFor(
+        `window.zzwork.invoke('store','settings.get',{key: 'terminal:layout:${jia.id}', dflt: ''}).then(x => { try { return !!JSON.parse(x).open } catch { return false } })`,
+        8000, '甲展开态已持久化'
+      )
+
+      // 切到乙：乙从未展开，终端应保持收起（不继承甲的展开态）
+      await selectTask(app, '展开乙')
+      await app.waitFor(`!document.querySelector('.term-panel').classList.contains('on')`, 6000, '切到乙后终端应收起')
+      assert.equal(await isOn(), false, '任务乙终端不应因任务甲展开而展开')
+
+      // 切回甲：应恢复甲的展开态
+      await selectTask(app, '展开甲')
+      await app.waitFor(`document.querySelector('.term-panel').classList.contains('on')`, 6000, '切回甲后终端恢复展开')
+      assert.equal(await isOn(), true, '切回甲应恢复展开')
+
+      // 收尾：收起甲，避免影响后续用例
+      await app.click('#termToggle')
+      await app.waitFor(`!document.querySelector('.term-panel').classList.contains('on')`, 6000, '甲收起收尾')
+    }
+  },
+  {
     name: 'exit 正常退出自动关闭窗格',
     async run(app) {
       await selectTask(app, '终端甲')

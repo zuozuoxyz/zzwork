@@ -167,10 +167,13 @@ export function bindMarkdownClicks(host) {
       openFile(p, basename(p))
       return
     }
-    const ext = e.target.closest('a.extlink[href]')
-    if (ext) {
+    // 其余链接：聊天内容里的任意 <a> 都不得让主窗口跳转；
+    // http(s) 交给系统浏览器打开，其余（file:/相对路径等）直接忽略
+    const a = e.target.closest('a[href]')
+    if (a) {
       e.preventDefault()
-      window.open(ext.getAttribute('href'), '_blank')
+      const href = a.getAttribute('href') || ''
+      if (/^https?:/i.test(href)) window.open(href, '_blank')
     }
   })
 }

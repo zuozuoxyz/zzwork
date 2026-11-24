@@ -20,7 +20,7 @@ let currentTaskId = null
 let panel = null
 let body = null
 let tabsEl = null
-let ui = { open: false, height: 260, max: false }
+let ui = { height: 260, max: false }
 let persistTimer = null
 
 const uuid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2))
@@ -44,7 +44,7 @@ function termTheme() {
 function taskState(taskId) {
   let ts = tasks.get(taskId)
   if (!ts) {
-    ts = { tabs: [], activeTabId: null, panes: new Map(), loaded: false }
+    ts = { tabs: [], activeTabId: null, panes: new Map(), loaded: false, open: false }
     tasks.set(taskId, ts)
   }
   return ts
@@ -73,25 +73,35 @@ function mkPane(paneId, taskId) {
 
 // ---------- 持久化 ----------
 
+function saveLayout(tid) {
+  const ts = tasks.get(tid)
+  if (!ts) return
+  const data = {
+    tabs: ts.tabs.map((t) => ({ id: t.id, title: t.title, layout: t.layout, activePaneId: t.activePaneId })),
+    activeTabId: ts.activeTabId,
+    open: !!ts.open
+  }
+  store('settings.set', { key: 'terminal:layout:' + tid, value: JSON.stringify(data) }).catch(() => {})
+}
+
 function persist() {
   const tid = currentTaskId
   if (!tid) return
   clearTimeout(persistTimer)
-  persistTimer = setTimeout(() => {
-    const ts = tasks.get(tid)
-    if (!ts) return
-    const data = {
-      tabs: ts.tabs.map((t) => ({ id: t.id, title: t.title, layout: t.layout, activePaneId: t.activePaneId })),
-      activeTabId: ts.activeTabId
-    }
-    store('settings.set', { key: 'terminal:layout:' + tid, value: JSON.stringify(data) }).catch(() => {})
-  }, 300)
+  persistTimer = setTimeout(() => saveLayout(tid), 300)
+}
+
+// 顶部终端按钮的高亮跟随「当前任务」的展开态，而非全局
+function syncToggle() {
+  const toggle = $('#termToggle')
+  if (!toggle) return
+  const ts = currentTaskId ? tasks.get(currentTaskId) : null
+  toggle.classList.toggle('on', !!(ts && ts.open))
 }
 
 function saveUi() {
   store('settings.set', { key: UI_KEY, value: JSON.stringify(ui) }).catch(() => {})
-  const toggle = $('#termToggle')
-  if (toggle) toggle.classList.toggle('on', ui.open)
+  syncToggle()
 }
 
 async function loadStored(taskId) {
@@ -115,6 +125,7 @@ async function loadStored(taskId) {
       ts.tabs.push({ id: t.id || uuid(), title: t.title || '终端', layout: t.layout, activePaneId: t.activePaneId || panes[0] })
     }
     ts.activeTabId = (data.tabs || []).length ? (data.activeTabId || ts.tabs[0].id) : null
+    ts.open = !!data.open
   } catch {}
   return ts
 }
@@ -420,9 +431,9 @@ function newTab() {
   const tab = { id: uuid(), title: '终端', layout: { type: 'leaf', id: paneId }, activePaneId: paneId }
   ts.tabs.push(tab)
   ts.activeTabId = tab.id
-  ui.open = true
+  ts.open = true
   if (panel) panel.classList.add('on')
-  saveUi()
+  syncToggle()
   renderPanel()
   persist()
   setTimeout(focusActive, 60)
@@ -485,16 +496,16 @@ function toggleMax() {
 
 export function toggleTerminal(force) {
   if (!currentTaskId) return
-  ui.open = force === undefined ? !ui.open : !!force
-  if (panel) panel.classList.toggle('on', ui.open)
-  saveUi()
-  if (ui.open) {
-    const ts = taskState(currentTaskId)
+  const ts = taskState(currentTaskId)
+  ts.open = force === undefined ? !ts.open : !!force
+  if (panel) panel.classList.toggle('on', ts.open)
+  syncToggle()
+  saveLayout(currentTaskId)
+  if (ts.open) {
     if (!ts.tabs.length) newTab()
     else { renderPanel(); setTimeout(focusActive, 60) }
   } else {
-    const ts = tasks.get(currentTaskId)
-    const tab = ts && activeTab(ts)
+    const tab = activeTab(ts)
     const pane = tab && ts.panes.get(tab.activePaneId)
     if (pane && pane.term) pane.term.blur()
   }
@@ -503,9 +514,10 @@ export function toggleTerminal(force) {
 export async function attachTaskTerminal(taskId) {
   currentTaskId = taskId
   if (!panel) return
-  if (!taskId) { panel.classList.remove('on'); return }
+  if (!taskId) { panel.classList.remove('on'); syncToggle(); return }
   const ts = await loadStored(taskId)
-  panel.classList.toggle('on', ui.open)
+  panel.classList.toggle('on', !!ts.open)
+  syncToggle()
   renderPanel()
 }
 
@@ -529,9 +541,7 @@ export function initTerminalView() {
     if (panel) panel.style.height = (ui.height || 260) + 'px'
     const ed = document.querySelector('.ed')
     if (ed) ed.classList.toggle('term-max', !!ui.max)
-    const toggle = $('#termToggle')
-    if (toggle) toggle.classList.toggle('on', !!ui.open)
-    if (panel && currentTaskId) panel.classList.toggle('on', !!ui.open)
+    syncToggle()
   }
   applyUi()
 

@@ -1,5 +1,5 @@
 // 任务信息 pane
-import { store, fsapi, chat as chatApi, env as envApi } from '../lib/api.js'
+import { store, fsapi, chat as chatApi, env as envApi, share as shareApi } from '../lib/api.js'
 import { state, activeTask, taskMeta, emit, on } from '../lib/state.js'
 import { $, esc, ic, refreshIcons, envLabelFromPath, joinPath, debounce, fmtTime } from '../lib/ui.js'
 import { reloadTasks } from '../lib/data.js'
@@ -23,6 +23,7 @@ on('keyinfo-updated', ({ taskId, content }) => {
 let renderSeq = 0
 const detecting = new Set()
 const STATUS_OPTIONS = [['active', '进行中'], ['paused', '已暂停'], ['done', '已完成']]
+const TYPE_OPTIONS = [['work', 'work'], ['code', 'code']]
 
 // 任务路径 -> 所在环境（与主进程 resolveTaskEnv 对齐）
 export function taskEnvDesc(task) {
@@ -94,6 +95,7 @@ export async function renderInfo() {
     store('sessions.list', { taskId: task.id }).catch(() => []),
     store('groups.list').catch(() => state.groups)
   ])
+  const shareInfo = await shareApi('task.get', { taskId: task.id }).catch(() => null)
   const groupList = groups || state.groups
   const groupById = new Map((groupList || []).map((g) => [g.id, g]))
   const groupLabel = (g) => { const parts = []; let c = g, n = 0; while (c && n++ < 50) { parts.unshift(c.name); c = c.parent_id ? groupById.get(c.parent_id) : null } return parts.join(' / ') }
@@ -116,6 +118,8 @@ export async function renderInfo() {
   const statusOpts = STATUS_OPTIONS.some(([v]) => v === status)
     ? STATUS_OPTIONS
     : STATUS_OPTIONS.concat([[status, status]])
+  const type = task.type || 'work'
+  const typeOpts = TYPE_OPTIONS.some(([v]) => v === type) ? TYPE_OPTIONS : TYPE_OPTIONS.concat([[type, type]])
   const envLabel = meta.envLabel || envLabelFromPath(task.path)
   const group = state.groups.find((g) => g.id === task.group_id)
   const envDesc = taskEnvDesc(task)
@@ -123,11 +127,13 @@ export async function renderInfo() {
   if (!det) ensureDetected(envDesc, task.id)
   const detectedIds = det ? det.list.filter((a) => a.ok).map((a) => a.id) : null
   const allAgents = state.agents.length ? state.agents : [{ id: 'builtin', name: '内置模型聊天', kind: 'builtin' }]
-  const visibleAgents = allAgents.filter((a) => a.kind === 'builtin' || !detectedIds || detectedIds.includes(a.id))
+  const visibleAgents = allAgents.filter((a) => a.kind === 'external' || a.kind === 'builtin' || !detectedIds || detectedIds.includes(a.id))
   const curAgent = allAgents.find((a) => a.id === task.agent_id) || null
   const agentMissing = !!(detectedIds && curAgent && !visibleAgents.includes(curAgent))
   if (agentMissing) visibleAgents.push(curAgent)
   const agent = curAgent || visibleAgents[0] || {}
+  const agentRow = allAgents.find((a) => a.id === agent.id) || agent
+  const shareSection = buildShareSection(shareInfo, agentRow)
   const dflt = state.models.find((m) => m.is_default) || state.models[0] || null
   const cur = task.model_id ? state.models.find((m) => m.id === task.model_id) : null
   const modelGroups = (() => {
@@ -168,7 +174,9 @@ export async function renderInfo() {
 
   body.innerHTML = `
     <div class="hd"><h2>${esc(task.name)}</h2>
-      <span class="pill b">${esc(task.type)}</span>
+      <select class="pill-sel ty-${esc(type)}" id="typeSel" title="任务类型：work 通用 / code 代码仓库">
+        ${typeOpts.map(([v, label]) => `<option value="${esc(v)}" ${v === type ? 'selected' : ''}>${esc(label)}</option>`).join('')}
+      </select>
       <select class="pill-sel st-${esc(status)}" id="statusSel" title="任务状态">
         ${statusOpts.map(([v, label]) => `<option value="${esc(v)}" ${v === status ? 'selected' : ''}>${esc(label)}</option>`).join('')}
       </select>
@@ -199,6 +207,7 @@ export async function renderInfo() {
       <div class="cell"><div class="k">启用 Skills / MCP</div><div class="v">${skills.length - exSkills.length} / ${mcps.length - exMcp.length}
         <span style="color:var(--faint);font-size:10.5px">按任务裁剪，默认全选</span></div></div>
     </div>
+    ${shareSection}
     <div class="sec">任务简介
       <span style="text-transform:none;letter-spacing:0;color:var(--faint)">所有会话汇总，供多代理共享</span>
       <button class="btn sm" id="refreshBriefBtn" style="margin-left:auto">${ic('refresh-cw', 11)} 刷新</button></div>
@@ -248,6 +257,12 @@ export async function renderInfo() {
     ])
   })
 
+  $('#typeSel').addEventListener('change', async (e) => {
+    await store('tasks.update', { id: task.id, patch: { type: e.target.value } })
+    await reloadTasks()
+    emit('tasks-changed')
+    await renderInfo()
+  })
   $('#statusSel').addEventListener('change', async (e) => {
     await store('tasks.update', { id: task.id, patch: { status: e.target.value } })
     await reloadTasks()
@@ -308,6 +323,27 @@ export async function renderInfo() {
     await renderInfo()
   })
 
+  const shareEl = (id) => document.getElementById(id)
+  if (shareEl('shareEnable')) shareEl('shareEnable').addEventListener('click', async () => {
+    try { await shareApi('task.enable', { taskId: task.id }); toast('已开启分享'); await renderInfo() }
+    catch (e) { toast('开启分享失败：' + e.message, 'err') }
+  })
+  if (shareEl('shareDisable')) shareEl('shareDisable').addEventListener('click', async () => {
+    try { await shareApi('task.disable', { taskId: task.id }); toast('已关闭分享'); await renderInfo() }
+    catch (e) { toast(e.message, 'err') }
+  })
+  if (shareEl('shareRegen')) shareEl('shareRegen').addEventListener('click', async () => {
+    try { await shareApi('task.regenerate', { taskId: task.id }); toast('已重新生成链接，旧链接立即失效'); await renderInfo() }
+    catch (e) { toast(e.message, 'err') }
+  })
+  if (shareEl('shareCopy')) shareEl('shareCopy').addEventListener('click', async () => {
+    const v = shareEl('shareLink') && shareEl('shareLink').value
+    try { await navigator.clipboard.writeText(v || ''); toast('链接已复制') }
+    catch { toast('复制失败，请手动选择复制', 'err') }
+  })
+  if (shareEl('addRemoteBtn')) shareEl('addRemoteBtn').addEventListener('click', () => addRemoteAgent())
+  if (shareEl('browseRemoteBtn')) shareEl('browseRemoteBtn').addEventListener('click', () => browseRemote(shareEl('browseRemoteBtn').getAttribute('data-link')))
+
   updateStatus(task, todoDone, todos.length, envLabel)
 }
 
@@ -363,4 +399,118 @@ async function deleteSession(session) {
     toast('已删除会话')
     await renderInfo()
   } catch (e) { toast('删除失败：' + e.message, 'err') }
+}
+
+// 远程与分享：开启分享 / 展示链接，以及把他人链接添加为外部执行体
+function buildShareSection(info, agentRow) {
+  const running = !!(info && info.running)
+  const enabled = !!(info && info.enabled)
+  const link = (info && info.link) || ''
+  let status
+  if (running) status = '分享服务运行中 · 端口 ' + (info.port || '') + (info.publicBase ? ' · 隧道 ' + esc(info.publicBase) : '')
+  else if (info && info.error) status = '分享服务启动失败：' + esc(info.error)
+  else status = '分享服务未运行'
+  let body
+  if (enabled && link) {
+    body = `<div class="sharerow"><input class="ftxt" id="shareLink" readonly value="${esc(link)}"><button class="btn sm" id="shareCopy">复制</button></div>
+      <div class="sharerow"><button class="btn sm" id="shareRegen">重新生成链接</button><button class="btn sm" id="shareDisable">关闭分享</button></div>`
+  } else {
+    body = `<div class="sharerow"><button class="btn sm pri" id="shareEnable">生成分享链接</button>
+      <span class="sharehint">生成后用公网隧道（如 cloudflared）把本机端口暴露出去即可分享</span></div>`
+  }
+  const extBtn = agentRow && agentRow.kind === 'external' && agentRow.link
+    ? `<div class="sharerow"><button class="btn sm" id="browseRemoteBtn" data-link="${esc(agentRow.link)}">${ic('folder-search', 11)} 浏览远端文件</button>
+        <span class="sharehint">当前执行体：${esc(agentRow.name || '')}</span></div>`
+    : ''
+  return `<div class="sec">远程与分享</div>
+    <div class="sharecell">
+      <div class="sharehint">${status}</div>
+      ${body}
+      <div class="sharesep"></div>
+      <div class="sharehint">把别人的分享链接添加为「外部执行体」，在本任务的执行体下拉里选择即可远程问答：</div>
+      <div class="sharerow"><input class="ftxt" id="remoteLinkInput" placeholder="粘贴分享链接（https://…/s/…）">
+        <input class="ftxt shname" id="remoteNameInput" placeholder="名称(可选)"><button class="btn sm" id="addRemoteBtn">添加</button></div>
+      ${extBtn}
+    </div>`
+}
+
+async function addRemoteAgent() {
+  const link = ((document.getElementById('remoteLinkInput') || {}).value || '').trim()
+  if (!link) { toast('请先粘贴分享链接', 'err'); return }
+  const customName = ((document.getElementById('remoteNameInput') || {}).value || '').trim()
+  const t = await shareApi('agent.test', { link }).catch((e) => ({ ok: false, error: e.message }))
+  if (!t || !t.ok) { toast('链接不可用：' + ((t && t.error) || '未知错误'), 'err'); return }
+  const id = 'ext-' + Math.random().toString(16).slice(2, 10)
+  const name = customName || ('远程 · ' + (t.name || '任务'))
+  const list = (state.agents || []).slice()
+  list.push({ id, name, kind: 'external', link, remoteName: t.name || '' })
+  try {
+    await store('agents.save', { list })
+    state.agents = await store('agents.list')
+    toast('已添加外部执行体「' + name + '」，可在上方执行体下拉选择')
+    await renderInfo()
+  } catch (e) { toast('添加失败：' + e.message, 'err') }
+}
+
+// 远端文件浏览：只读，点击目录下钻、点击文件查看内容
+function browseRemote(link) {
+  if (!link) return
+  const host = document.getElementById('modal-host')
+  const mask = document.createElement('div')
+  mask.className = 'zz-modal-mask'
+  mask.innerHTML = `<div class="zz-modal zz-remote" style="width:640px;max-width:92vw">
+    <div class="mt">远端文件<span class="rb-name"></span></div>
+    <div class="rb-crumb"></div>
+    <div class="rb-list"></div>
+    <pre class="rb-content" hidden></pre>
+    <div class="mbtns"><button class="btn" data-act="close">关闭</button></div>
+  </div>`
+  host.appendChild(mask)
+  const listEl = mask.querySelector('.rb-list')
+  const crumbEl = mask.querySelector('.rb-crumb')
+  const contentEl = mask.querySelector('.rb-content')
+  const nameEl = mask.querySelector('.rb-name')
+  let curPath = ''
+  const onKey = (e) => { if (e.key === 'Escape') { e.preventDefault(); close() } }
+  const close = () => { document.removeEventListener('keydown', onKey, true); mask.remove() }
+  document.addEventListener('keydown', onKey, true)
+  mask.addEventListener('mousedown', (e) => { if (e.target === mask) close() })
+  mask.querySelector('[data-act="close"]').addEventListener('click', close)
+
+  const load = async (path) => {
+    curPath = path || ''
+    crumbEl.textContent = '/ ' + curPath
+    contentEl.hidden = true
+    contentEl.textContent = ''
+    listEl.innerHTML = '<div class="rb-empty">加载中…</div>'
+    let r
+    try { r = await shareApi('fs.list', { link, path: curPath }) } catch (e) { listEl.innerHTML = '<div class="rb-empty">读取失败：' + esc(e.message) + '</div>'; return }
+    if (!r || !r.ok) { listEl.innerHTML = '<div class="rb-empty">' + esc((r && r.error) || '读取失败') + '</div>'; return }
+    const items = r.list || []
+    const rows = []
+    if (curPath) rows.push('<div class="rb-row dir" data-up="1">⬆ 返回上级</div>')
+    items.forEach((it, i) => rows.push(`<div class="rb-row ${it.dir ? 'dir' : 'file'}" data-i="${i}">${it.dir ? '📁' : '📄'} ${esc(it.name)}</div>`))
+    if (!items.length) rows.push('<div class="rb-empty">（空目录）</div>')
+    listEl.innerHTML = rows.join('')
+    listEl.querySelectorAll('.rb-row').forEach((row) => {
+      row.addEventListener('click', () => {
+        if (row.getAttribute('data-up')) { load(curPath.split('/').slice(0, -1).join('/')); return }
+        const it = items[Number(row.getAttribute('data-i'))]
+        if (!it) return
+        if (it.dir) load(it.path)
+        else showFile(it.path)
+      })
+    })
+  }
+  const showFile = async (path) => {
+    contentEl.hidden = false
+    contentEl.textContent = '加载中…'
+    let r
+    try { r = await shareApi('fs.read', { link, path }) } catch (e) { contentEl.textContent = '读取失败：' + e.message; return }
+    if (!r || !r.ok) { contentEl.textContent = (r && r.error) || '读取失败'; return }
+    contentEl.textContent = r.content || '（空文件）'
+  }
+
+  shareApi('agent.test', { link }).then((t) => { if (t && t.ok) nameEl.textContent = ' · ' + (t.name || '') }).catch(() => {})
+  load('')
 }

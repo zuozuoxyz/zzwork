@@ -20,6 +20,7 @@ const CASE_FILES = [
   'features.mjs',
   'board.mjs',
   'featuremap.mjs',
+  'share.mjs',
   'terminal.mjs',
   'security.mjs'
 ]

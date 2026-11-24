@@ -61,6 +61,11 @@ export function renderTabs() {
       const on = state.pane === 'card' && state.cardActive === c.id ? ' on' : ''
       parts.push(`<div class="tab${on}" data-pane="card" data-card="${esc(c.id)}" title="${esc(c.name)}">${ic('message-square', 12)}<span>${esc(c.name)}</span><span class="x" title="关闭">×</span></div>`)
     }
+    for (const ft of state.fileTabs) {
+      const on = state.pane === 'file' && state.activeFile === ft.path ? ' on' : ''
+      parts.push(`<div class="tab${on}" data-pane="file" data-file="${esc(ft.path)}">
+        ${ic('file-code', 12)}<span>${esc(ft.name)}${ft.dirty ? ' •' : ''}</span><span class="x" title="关闭">×</span></div>`)
+    }
     bar.innerHTML = parts.join('')
     refreshIcons()
     bindTabClicks(bar)

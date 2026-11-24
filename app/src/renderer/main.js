@@ -11,7 +11,7 @@ import { initMcpView, renderMcp, renderMcpDetail } from './views/mcp.js'
 import { initModelsView, renderModels, renderModelDetail, renderProviderDetail } from './views/models.js'
 import { renderSettings } from './views/settings.js'
 import { initInboxView, renderInboxBoard, renderInboxCode } from './views/inbox.js'
-import { renderBoard, initBoardView, mountCardChat, previewCardFile } from './views/board.js'
+import { renderBoard, initBoardView, mountCardChat } from './views/board.js'
 import { renderTabs, showPane } from './workbench/tabs.js'
 import { renderInfo } from './workbench/info.js'
 import { renderSession, initSessionView } from './workbench/session.js'
@@ -52,6 +52,7 @@ function abandonCardTabs() {
   cleanupCardChat()
   state.cardTabs = []
   state.cardActive = null
+  closeAllFiles() // 丢弃卡片工作目录里打开的临时文件标签
 }
 // 把某张卡片的 AI 对话挂载到编辑区 #cardChat；工作目录树显示在左侧系统侧栏
 function mountActiveCard(card, preset) {
@@ -80,13 +81,14 @@ function showBoardSideFiles(card) {
   const rb = $('#boardRefreshBtn'); if (rb) rb.style.display = 'none'
   // 未开始的卡片目录可能尚未创建，先建好再渲染（允许直接在其中放文件）
   fsapi('mkdir', { path: card.path }).catch(() => {}).finally(() => {
-    if (state.cardActive === card.id && files) renderFileTree(files, { root: card.path, onOpenFile: previewCardFile })
+    if (state.cardActive === card.id && files) renderFileTree(files, { root: card.path })
   })
 }
 // 依据当前编辑区是否为「卡片对话」pane 决定侧栏内容
 function syncBoardSide() {
   if (state.view !== 'board') return
-  if (state.pane === 'card' && state.cardActive) showBoardSideFiles(cardById(state.cardActive))
+  // 卡片对话或查看卡片工作目录里的文件时，侧栏都保持工作目录树
+  if ((state.pane === 'card' || state.pane === 'file') && state.cardActive) showBoardSideFiles(cardById(state.cardActive))
   else showBoardSideConfig()
 }
 function openCardTab(card, preset) {
@@ -98,6 +100,8 @@ function openCardTab(card, preset) {
   let t = state.cardTabs.find((x) => x.id === card.id)
   if (!t) { t = { id: card.id, name: card.name || '卡片' }; state.cardTabs.push(t) }
   else if (card.name) t.name = card.name
+  // 切换到不同的卡片时清掉上一张卡片打开的临时文件标签，避免串卡
+  if (state.cardActive !== card.id) closeAllFiles()
   state.cardActive = card.id
   renderTabs()
   showPane('card')
@@ -107,6 +111,7 @@ function activateCardTab(id) {
   if (!id) return
   const card = cardById(id)
   if (!card) return
+  if (state.cardActive !== id) closeAllFiles()
   state.cardActive = id
   renderTabs()
   showPane('card')

@@ -13,6 +13,7 @@ export const chat = (method, payload) => invoke('chat', method, payload || {})
 export const featuremap = (method, payload) => invoke('featuremap', method, payload || {})
 export const lspapi = (method, payload) => invoke('lsp', method, payload || {})
 export const updateapi = (method, payload) => invoke('update', method, payload || {})
+export const share = (method, payload) => invoke('share', method, payload || {})
 
 export const onChatEvent = (cb) => zz.on('chat:event', cb)
 export const onUpdateEvent = (cb) => zz.on('update:event', cb)
