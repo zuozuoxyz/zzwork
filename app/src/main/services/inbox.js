@@ -193,7 +193,6 @@ function logApplied(results) {
 async function apply(payload) {
   const S = getStore()
   const items = Array.isArray(payload.items) ? payload.items : []
-  const execute = payload.execute !== false
   const results = []
   const affected = new Set()
   for (const it of items) {
@@ -207,22 +206,19 @@ async function apply(payload) {
         try { fs.mkdirSync(card.path, { recursive: true }) } catch {}
         results.push({ ok: true, action: 'new', kind: 'board', text: it.text, taskId: card.id, taskName: card.name, sessionId: '', runId: '' })
       } else {
-        // 短期任务：常规项目任务，可归入分组，并立即执行
+        // 短期任务：常规项目任务，可归入分组；不立即执行，只把需求文本追加到
+        // 该任务的「会话管理」提示词，用户查看/编辑后再自行发送
         const name = String(it.name || it.text || '').trim().slice(0, 40) || '新任务'
         const target = String(it.path || '').trim() || uniquePath(path.join(workRoot(), safeName(name)), S)
         const task = S.createTask({ name, type: 'work', groupId: it.groupId || null, path: target, agentId: 'builtin' })
         fs.mkdirSync(task.path, { recursive: true })
         writeInfo(task, 'work')
         affected.add(task.id)
-        const session = S.createSession({
-          taskId: task.id, kind: 'chat', title: String(it.title || it.text || '需求').slice(0, 36), agentId: '', modelId: ''
-        })
-        let runId = ''
-        if (execute) {
-          const r = await chat.send({ taskId: task.id, text: it.text, sessionId: session.id })
-          runId = r && r.runId || ''
-        }
-        results.push({ ok: true, action: 'new', kind: 'task', text: it.text, taskId: task.id, taskName: task.name, sessionId: session.id, runId })
+        const promptKey = 'session:prompt:' + task.id
+        const prev = S.getSetting(promptKey, '')
+        const text = String(it.text || '').trim()
+        if (text) S.setSetting(promptKey, prev && prev.trim() ? prev.replace(/\s+$/, '') + '\n' + text : text)
+        results.push({ ok: true, action: 'new', kind: 'task', text: it.text, taskId: task.id, taskName: task.name, sessionId: '', runId: '' })
       }
     } catch (e) {
       results.push({

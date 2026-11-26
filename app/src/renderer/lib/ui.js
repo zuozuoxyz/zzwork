@@ -70,7 +70,10 @@ export function fmtTime(iso) {
 
 export function debounce(fn, ms) {
   let t = 0
-  return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms) }
+  const debounced = (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), ms) }
+  // 取消尚未触发的调用：清空输入后立刻发送时，用它丢弃旧内容待写入的存档，避免被写回
+  debounced.cancel = () => { clearTimeout(t); t = 0 }
+  return debounced
 }
 
 // token 数量紧凑显示：3100 → 3.1k，100 → 0.1k，0 → 0

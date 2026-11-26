@@ -780,41 +780,9 @@ async function processRun({ runId, entry, task, session, agent, model, env: envI
   const post2 = (o) => post({ taskId: task.id, sessionId: session.id, runId, ...o })
   const env = envIn || taskEnv(S, task)
   post2({ type: 'phase', phase: 'changes' })
-  let ch = null
-  let turnStart = null
-  try {
-    const collectP = changes.collect({ task, agent, env, ck: parseMeta(session.meta).ck })
-      .catch((e) => ({ text: '', summary: '变更检测失败：' + e.message, count: 0, detail: '', ck: null }))
-    const turnP = changes.captureTurn(task, env).catch(() => null)
-    ch = await collectP
-    turnStart = await turnP
-  } catch { ch = null }
 
-  if (entry.aborted) {
-    try {
-      S.addMessage(task.id, 'user', prompt, { sessionId: session.id, runId })
-      S.addMessage(task.id, 'assistant', '(已停止)', {
-        sessionId: session.id, kind: 'text', runId, meta: { status: 'stopped' }
-      })
-    } catch {}
-    post2({ type: 'done', content: '(已停止)' })
-    finishRun(runId, 'stopped', '')
-    return
-  }
-
-  if (ch && ch.text) {
-    const mid = S.addMessage(task.id, 'assistant', ch.summary, {
-      sessionId: session.id, kind: 'context', runId,
-      meta: { summary: ch.summary, details: ch.detail, count: ch.count }
-    })
-    post2({
-      type: 'context', messageId: mid,
-      summary: ch.summary, details: ch.detail, count: ch.count
-    })
-  } else if (ch && ch.summary) {
-    post2({ type: 'phase', phase: 'changes', summary: ch.summary })
-  }
-
+  // 先把用户消息落盘并回显，再去做可能很慢的工作区变更检测（git status/diff 等），
+  // 避免「点了发送却要等几秒消息气泡才出现」。
   // 图片附件落盘（.zzwork/uploads），全分辨率 dataUrl 仅本轮内存流转、不落 meta
   const savedFull = await persistAttachments({ task, attachments })
   const saved = savedFull.map(({ dataUrl, ...rest }) => rest)
@@ -831,6 +799,40 @@ async function processRun({ runId, entry, task, session, agent, model, env: envI
   const chatLog = [userText, saved.length ? '[图片] ' + saved.map((s) => s.name).join(', ') : ''].filter(Boolean).join('\n\n')
   appendChatFile(task, 'user', chatLog || '(图片)', { sessionTitle: session.title })
   post2({ type: 'user', text: userText, messageId: mid, attachments: saved })
+
+  let ch = null
+  let turnStart = null
+  try {
+    const collectP = changes.collect({ task, agent, env, ck: parseMeta(session.meta).ck })
+      .catch((e) => ({ text: '', summary: '变更检测失败：' + e.message, count: 0, detail: '', ck: null }))
+    const turnP = changes.captureTurn(task, env).catch(() => null)
+    ch = await collectP
+    turnStart = await turnP
+  } catch { ch = null }
+
+  if (entry.aborted) {
+    try {
+      S.addMessage(task.id, 'assistant', '(已停止)', {
+        sessionId: session.id, kind: 'text', runId, meta: { status: 'stopped' }
+      })
+    } catch {}
+    post2({ type: 'done', content: '(已停止)' })
+    finishRun(runId, 'stopped', '')
+    return
+  }
+
+  if (ch && ch.text) {
+    const cmid = S.addMessage(task.id, 'assistant', ch.summary, {
+      sessionId: session.id, kind: 'context', runId,
+      meta: { summary: ch.summary, details: ch.detail, count: ch.count }
+    })
+    post2({
+      type: 'context', messageId: cmid,
+      summary: ch.summary, details: ch.detail, count: ch.count
+    })
+  } else if (ch && ch.summary) {
+    post2({ type: 'phase', phase: 'changes', summary: ch.summary })
+  }
 
   if (agent.kind === 'builtin') runBuiltin({ runId, task, session, agent, model, changes: ch, env, turnStart, prompt: userText, attachments: savedFull, depth })
   else if (agent.kind === 'external') runExternal({ runId, task, session, agent, prompt: userText })

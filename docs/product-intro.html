@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>zzwork · 产品介绍</title>
+<style>
+  :root {
+    --bg: #14161a;
+    --bg2: #171a1f;
+    --card: rgba(255,255,255,.028);
+    --card2: rgba(255,255,255,.045);
+    --bd: rgba(255,255,255,.08);
+    --bd2: rgba(255,255,255,.14);
+    --fg: #e7ebf0;
+    --dim: #9aa4b2;
+    --faint: #667080;
+    --sky: #38bdf8;
+    --teal: #2dd4bf;
+    --amber: #eab308;
+    --green: #3fb950;
+    --grad: linear-gradient(135deg, #38bdf8, #2dd4bf);
+    --radius: 16px;
+  }
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--fg);
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background:
+      radial-gradient(650px 420px at 12% -4%, rgba(56,189,248,.16), transparent 70%),
+      radial-gradient(720px 480px at 92% 2%, rgba(45,212,191,.12), transparent 72%),
+      radial-gradient(900px 600px at 50% 120%, rgba(56,189,248,.06), transparent 70%);
+  }
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background-image:
+      linear-gradient(rgba(255,255,255,.022) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,.022) 1px, transparent 1px);
+    background-size: 46px 46px;
+    mask-image: radial-gradient(circle at 50% 30%, #000 0%, transparent 78%);
+    -webkit-mask-image: radial-gradient(circle at 50% 30%, #000 0%, transparent 78%);
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+  a { color: var(--sky); text-decoration: none; }
+
+  /* 顶部导航 */
+  header.nav {
+    position: sticky; top: 0; z-index: 20;
+    backdrop-filter: blur(14px);
+    background: rgba(20,22,26,.72);
+    border-bottom: 1px solid var(--bd);
+  }
+  .nav-inner { display: flex; align-items: center; gap: 14px; height: 58px; }
+  .brand { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: .3px; font-size: 15px; }
+  .brand .mark { width: 26px; height: 26px; border-radius: 7px; }
+  .nav-links { margin-left: auto; display: flex; gap: 4px; }
+  .nav-links a {
+    color: var(--dim); font-size: 13px; padding: 6px 12px; border-radius: 8px;
+    transition: .16s; white-space: nowrap;
+  }
+  .nav-links a:hover { color: var(--fg); background: var(--card2); }
+  .nav-links a .mode { font-weight: 600; }
+
+  /* Hero */
+  .hero { padding: 88px 0 56px; text-align: center; }
+  .hero .logo {
+    width: 88px; height: 88px; border-radius: 22px; margin: 0 auto 26px; display: block;
+    filter: drop-shadow(0 14px 40px rgba(56,189,248,.28));
+  }
+  .hero h1 {
+    font-size: clamp(38px, 6vw, 60px); line-height: 1.05; margin: 0 0 18px;
+    letter-spacing: -.02em; font-weight: 800;
+  }
+  .hero h1 .g { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .hero p.lead {
+    font-size: clamp(15px, 2.2vw, 18px); color: var(--dim); max-width: 640px; margin: 0 auto;
+    line-height: 1.8;
+  }
+  .hero .pills { margin-top: 28px; display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+  .pill {
+    font-size: 12px; color: var(--dim); border: 1px solid var(--bd);
+    background: var(--card); padding: 6px 14px; border-radius: 999px;
+  }
+  .pill b { color: var(--fg); font-weight: 600; }
+
+  /* 三种模式演进 */
+  .modes-intro { padding: 8px 0 12px; }
+  .roadmap {
+    display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 8px 0 64px;
+  }
+  .rstep {
+    position: relative; padding: 20px 20px 18px; border-radius: 14px;
+    border: 1px solid var(--bd); background: var(--card); transition: .2s;
+  }
+  .rstep:hover { border-color: var(--bd2); background: var(--card2); transform: translateY(-2px); }
+  .rstep .idx { font-size: 12px; font-weight: 700; color: var(--sky); letter-spacing: .12em; }
+  .rstep .acr { font-size: 22px; font-weight: 800; letter-spacing: .01em; margin: 3px 0 6px; }
+  .rstep .acr .g { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .rstep .label { font-size: 13px; color: var(--dim); }
+  .rstep.done { border-color: rgba(63,185,80,.32); }
+  .rstep.doing { border-color: rgba(56,189,248,.42); box-shadow: 0 0 0 1px rgba(56,189,248,.12) inset; }
+  .rstep .status {
+    position: absolute; top: 16px; right: 16px; font-size: 11px; font-weight: 600;
+    padding: 3px 10px; border-radius: 999px;
+  }
+  .status.done { color: #7ee787; background: rgba(63,185,80,.14); border: 1px solid rgba(63,185,80,.3); }
+  .status.doing { color: #7dd3fc; background: rgba(56,189,248,.14); border: 1px solid rgba(56,189,248,.32); }
+  .status.plan { color: var(--faint); background: rgba(255,255,255,.04); border: 1px solid var(--bd); }
+
+  /* 区块 */
+  section.block {
+    padding: 56px 0; border-top: 1px solid var(--bd);
+    scroll-margin-top: 74px;
+  }
+  .block-head { display: flex; align-items: flex-end; gap: 18px; flex-wrap: wrap; margin-bottom: 10px; }
+  .block-head .tag {
+    font-size: 11px; font-weight: 700; letter-spacing: .16em; color: var(--sky);
+    padding: 4px 0; text-transform: uppercase;
+  }
+  .block-head h2 {
+    font-size: clamp(26px, 4vw, 36px); margin: 0; font-weight: 800; letter-spacing: -.01em;
+  }
+  .block-head h2 .g { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .block-head .sub { color: var(--dim); font-size: 14.5px; }
+  .block > .wrap > .desc { color: var(--dim); max-width: 720px; margin: 0 0 30px; font-size: 15px; }
+
+  /* 功能分类网格 */
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  .fcard {
+    border: 1px solid var(--bd); background: var(--card); border-radius: var(--radius);
+    padding: 22px 22px 20px; transition: .2s;
+  }
+  .fcard:hover { border-color: var(--bd2); background: var(--card2); }
+  .fcard h3 {
+    display: flex; align-items: center; gap: 10px; font-size: 15px; margin: 0 0 14px; font-weight: 700;
+  }
+  .fcard h3 .ic {
+    width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center;
+    background: rgba(56,189,248,.12); color: var(--sky); flex: 0 0 auto;
+  }
+  .fcard ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 9px; }
+  .fcard li { position: relative; padding-left: 18px; font-size: 13.5px; color: var(--dim); }
+  .fcard li::before {
+    content: ""; position: absolute; left: 2px; top: 9px; width: 6px; height: 6px; border-radius: 50%;
+    background: var(--grad);
+  }
+  .fcard li b { color: var(--fg); font-weight: 600; }
+
+  /* 流程 */
+  .flow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 8px 0 26px; counter-reset: s; }
+  .flow .step {
+    position: relative; border: 1px solid var(--bd); background: var(--card); border-radius: 13px;
+    padding: 18px 16px 16px;
+  }
+  .flow .step::before {
+    counter-increment: s; content: counter(s);
+    display: grid; place-items: center; width: 26px; height: 26px; border-radius: 8px;
+    background: var(--grad); color: #06121a; font-weight: 800; font-size: 13px; margin-bottom: 12px;
+  }
+  .flow .step .h { font-size: 13.5px; font-weight: 700; margin-bottom: 6px; }
+  .flow .step .d { font-size: 12.5px; color: var(--dim); }
+  .flow .step .arrow { position: absolute; right: -10px; top: 50%; transform: translateY(-50%); color: var(--faint); z-index: 1; font-size: 16px; }
+  .flow .step:last-child .arrow { display: none; }
+
+  .notebox {
+    display: flex; align-items: flex-start; gap: 12px; padding: 16px 18px; border-radius: 13px;
+    border: 1px solid rgba(56,189,248,.28); background: rgba(56,189,248,.06); color: var(--dim);
+    font-size: 13.5px; margin-top: 8px;
+  }
+  .notebox .n-ic { color: var(--sky); flex: 0 0 auto; margin-top: 2px; }
+  .notebox b { color: var(--fg); }
+
+  /* 安全边界 */
+  .guard { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-top: 22px; }
+  .guard .gitem {
+    border: 1px solid var(--bd); background: var(--card); border-radius: 12px; padding: 15px 16px;
+  }
+  .guard .gitem .t { font-size: 13px; font-weight: 700; margin-bottom: 5px; color: var(--fg); }
+  .guard .gitem .d { font-size: 12.5px; color: var(--dim); }
+
+  /* T2T 愿景 */
+  .vision { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  .vitem {
+    border: 1px dashed var(--bd2); background: linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.012));
+    border-radius: 14px; padding: 20px;
+  }
+  .vitem .t { display: flex; align-items: center; gap: 9px; font-weight: 700; font-size: 14.5px; margin-bottom: 6px; }
+  .vitem .t .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--faint); }
+  .vitem .d { font-size: 13px; color: var(--dim); }
+  .plan-note { color: var(--faint); font-size: 13px; margin-top: 22px; font-style: italic; }
+
+  /* footer */
+  footer { border-top: 1px solid var(--bd); padding: 40px 0 60px; color: var(--faint); font-size: 12.5px; }
+  footer .frow { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; justify-content: space-between; }
+  footer .fbrand { display: inline-flex; align-items: center; gap: 8px; color: var(--dim); font-weight: 600; }
+  footer .fbrand .mark { width: 20px; height: 20px; border-radius: 6px; }
+
+  @media (max-width: 860px) {
+    .grid, .vision { grid-template-columns: 1fr; }
+    .flow { grid-template-columns: repeat(2, 1fr); }
+    .guard { grid-template-columns: 1fr; }
+    .flow .step .arrow { display: none; }
+    .nav-links a span.mode { display: none; }
+    .roadmap { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap nav-inner">
+    <span class="brand">
+      <svg class="mark" viewBox="0 0 512 512" aria-hidden="true">
+        <defs><linearGradient id="bm" x1="0.1" y1="0.1" x2="0.9" y2="0.9">
+          <stop offset="0" stop-color="#38bdf8"/><stop offset="1" stop-color="#2dd4bf"/>
+        </linearGradient></defs>
+        <rect width="512" height="512" rx="116" fill="#12161c"/>
+        <path d="M140 140 H342 L140 306 H342" fill="none" stroke="url(#bm)" stroke-width="64" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M280 256 H412 L280 390 H412" fill="none" stroke="url(#bm)" stroke-width="46" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      zzwork
+    </span>
+    <nav class="nav-links">
+      <a href="#s2s"><span class="mode">S2S</span> · 个人工作台</a>
+      <a href="#p2p"><span class="mode">P2P</span> · 任务分享</a>
+      <a href="#t2t"><span class="mode">T2T</span> · 团队协作</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero wrap">
+  <svg class="logo" viewBox="0 0 512 512" aria-hidden="true">
+    <defs><linearGradient id="hm" x1="0.1" y1="0.1" x2="0.9" y2="0.9">
+      <stop offset="0" stop-color="#38bdf8"/><stop offset="1" stop-color="#2dd4bf"/>
+    </linearGradient></defs>
+    <rect width="512" height="512" rx="112" fill="#12161c"/>
+    <path d="M140 140 H342 L140 306 H342" fill="none" stroke="url(#hm)" stroke-width="64" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M280 256 H412 L280 390 H412" fill="none" stroke="url(#hm)" stroke-width="46" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+  <h1>从一个工作台，<br>到一张<span class="g">协作网络</span></h1>
+  <p class="lead">
+    zzwork 是一款面向「任务」的 AI 桌面工作台：把项目、环境、执行体、Skills、MCP 与对话收进一个窗口。
+    它以 <b>S2S → P2P → T2T</b> 三步，把"我和 AI"的工作方式，逐步扩展成"我与人""团队与团队"的协作网络。
+  </p>
+  <div class="pills">
+    <span class="pill">Electron 桌面应用</span>
+    <span class="pill">任务 = 独立目录工作区</span>
+    <span class="pill">本机 / WSL / SSH</span>
+    <span class="pill">内置模型 + CLI 执行体</span>
+  </div>
+</div>
+
+<div class="wrap modes-intro">
+  <div class="roadmap">
+    <div class="rstep done">
+      <span class="status done">已上线</span>
+      <div class="idx">01</div>
+      <div class="acr"><span class="g">S2S</span></div>
+      <div class="label">Self to Self · 个人工作台</div>
+    </div>
+    <div class="rstep doing">
+      <span class="status doing">进行中</span>
+      <div class="idx">02</div>
+      <div class="acr"><span class="g">P2P</span></div>
+      <div class="label">People to People · 任务分享</div>
+    </div>
+    <div class="rstep">
+      <span class="status plan">待规划</span>
+      <div class="idx">03</div>
+      <div class="acr"><span class="g">T2T</span></div>
+      <div class="label">Team to Team · 团队协作</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============ S2S ============ -->
+<section class="block" id="s2s">
+  <div class="wrap">
+    <div class="block-head">
+      <span class="tag">01 · 已上线</span>
+    </div>
+    <div class="block-head">
+      <h2><span class="g">S2S</span> · Self to Self</h2>
+      <span class="sub">个人工作台：一个人 + 一台机器，把全部工作流收进一个窗口</span>
+    </div>
+    <p class="desc">
+      以「任务」为中心组织一切——每个任务就是一个独立目录工作区。环境、执行体、Skills、MCP、模型、AI 对话、
+      编辑器与终端都围绕任务展开，个人即可完成从想法到落地的完整闭环。
+    </p>
+
+    <div class="grid">
+      <div class="fcard">
+        <h3>
+          <span class="ic">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 3v18M16 3v18"/></svg>
+          </span>
+          任务与看板
+        </h3>
+        <ul>
+          <li><b>任务树 + 任务组</b>，work / code 两类任务，任务即独立目录工作区</li>
+          <li><b>看板卡片</b>：未开始 / 进行中 / 待审核 / 已完成，拖拽流转</li>
+          <li>应用中断后<b>自动续跑</b>进行中卡片，随时可<b>手动停止</b>接管</li>
+          <li><b>需求便签</b>：随手记录需求，AI 归类，逐条确认后执行</li>
+        </ul>
+      </div>
+
+      <div class="fcard">
+        <h3>
+          <span class="ic">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="7" rx="2"/><rect x="2" y="14" width="20" height="7" rx="2"/><path d="M6 6.5h.01M6 17.5h.01"/></svg>
+          </span>
+          环境与执行体
+        </h3>
+        <ul>
+          <li><b>本机 / WSL / SSH</b> 三种执行环境</li>
+          <li>自动探测已装执行体（Claude / zcode / codex / gemini…）</li>
+          <li>按任务所在环境<b>自动选用执行体</b>，绑定缺失时自动回退</li>
+          <li>CLI 执行体沿用会话记忆（<b>--resume</b>），对话连续不中断</li>
+        </ul>
+      </div>
+
+      <div class="fcard">
+        <h3>
+          <span class="ic">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M9 9h6v6H9zM9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></svg>
+          </span>
+          AI 与模型
+        </h3>
+        <ul>
+          <li>内置模型与 CLI 执行体，<b>统一对话体验</b></li>
+          <li>提供方 → 多模型<b>两级管理</b>，Key 本地加密保存</li>
+          <li>全局默认模型，任务级可覆盖</li>
+          <li>多会话、流式输出、思考折叠、停止、排队、图片附件</li>
+        </ul>
+      </div>
+
+      <div class="fcard">
+        <h3>
+          <span class="ic">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 2v6M15 2v6M7 8h10v4a5 5 0 0 1-5 5 5 5 0 0 1-5-5z"/><path d="M12 17v5"/></svg>
+          </span>
+          Skills / MCP
+        </h3>
+        <ul>
+          <li><b>全局 Skills</b>，远程会话自动同步，任务级启用 / 排除</li>
+          <li><b>全局 + 任务级 MCP</b>，真实握手测试（initialize + tools/list）</li>
+          <li>按任务开关技能与工具，控制上下文与权限</li>
+        </ul>
+      </div>
+
+      <div class="fcard">
+        <h3>
+          <span class="ic">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+          </span>
+          工作台与编辑器
+        </h3>
+        <ul>
+          <li>Monaco 编辑器、文件树、<b>文件 diff</b>、标签页按任务记忆</li>
+          <li>HTML 文件<b>可预览</b>，可在源码与效果间切换</li>
+          <li><b>功能图</b>与<b>画板</b>：结构与图形可连同描述一起发给 AI</li>
+          <li>多标签终端、向右/向下拆分，本机 / WSL / SSH 一致</li>
+        </ul>
+      </div>
+
+      <div class="fcard">
+        <h3>
+          <span class="ic">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.2-8.5"/><path d="M21 3v6h-6"/></svg>
+          </span>
+          桌面体验
+        </h3>
+        <ul>
+          <li>启动开屏动画，界面秒开可操作</li>
+          <li>自动检查新版本，<b>一键下载安装</b></li>
+          <li>VS Code 风格外观：细滚轮、自绘标题栏、原生窗口按钮</li>
+          <li>数据本地化：业务库 SQLite，对话随任务落盘</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ P2P ============ -->
+<section class="block" id="p2p">
+  <div class="wrap">
+    <div class="block-head">
+      <span class="tag">02 · 进行中</span>
+    </div>
+    <div class="block-head">
+      <h2><span class="g">P2P</span> · People to People</h2>
+      <span class="sub">任务分享：把任务"点对点"交到另一个人手里</span>
+    </div>
+    <p class="desc">
+      每个任务都能生成一个<b>分享链接</b>。另一台装了 zzwork 的机器，只要在自己的某个任务里把这个链接加为
+      <b>外部执行体</b>，选中它发消息时，问题就会经链接转发到远端的被分享任务，由远端以只读隐藏会话
+      结合该任务的上下文作答，结果实时回到你的对话里——无需中央服务器，自带公网隧道即可。
+    </p>
+
+    <div class="flow">
+      <div class="step">
+        <div class="h">分享任务</div>
+        <div class="d">在任务信息里开启分享，生成带 token 的链接（配合 cloudflared / ngrok 等自带隧道暴露到公网）</div>
+        <span class="arrow">→</span>
+      </div>
+      <div class="step">
+        <div class="h">添加执行体</div>
+        <div class="d">对方在自己的任务里粘贴链接，经连通性测试后，添加为「远程外部执行体」</div>
+        <span class="arrow">→</span>
+      </div>
+      <div class="step">
+        <div class="h">路由对话</div>
+        <div class="d">选中该执行体后，本任务 AI 对话即路由到远端，由远端隐藏会话只读作答</div>
+        <span class="arrow">→</span>
+      </div>
+      <div class="step">
+        <div class="h">取回结果</div>
+        <div class="d">远端答案与本机对话呈现一致；也可只读浏览远端任务目录里的文件</div>
+      </div>
+    </div>
+
+    <div class="notebox">
+      <span class="n-ic">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 L3 7v10l9 5 9-5V7z"/><path d="M12 22V12M3 7l9 5 9-5"/></svg>
+      </span>
+      <div>
+        <b>当前状态：</b>任务信息面板里的分享链接、外部执行体与只读问答已可用，正在打磨连接体验、错误提示与文件浏览。
+        传输不依赖中继服务，成本与数据都留在你自己的机器上。
+      </div>
+    </div>
+
+    <h3 style="margin:34px 0 14px;font-size:15px;color:var(--fg)">暴露面被刻意收窄</h3>
+    <div class="guard">
+      <div class="gitem">
+        <div class="t">只读问答</div>
+        <div class="d">远端以隐藏会话注入任务上下文作答，强制内置模型，仅回文字结论，不驱动代码执行。</div>
+      </div>
+      <div class="gitem">
+        <div class="t">只读文件浏览</div>
+        <div class="d">仅按相对路径读取，realpath 后再校验是否越界；单文件限大小，拒绝二进制。</div>
+      </div>
+      <div class="gitem">
+        <div class="t">链接与请求防护</div>
+        <div class="d">32 字节 token、定长比较、统一 404、仅接受 POST、限流与超时；默认不外泄关键信息与提示词。</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ T2T ============ -->
+<section class="block" id="t2t">
+  <div class="wrap">
+    <div class="block-head">
+      <span class="tag">03 · 待规划</span>
+    </div>
+    <div class="block-head">
+      <h2><span class="g">T2T</span> · Team to Team</h2>
+      <span class="sub">团队协作：从"点对点"走向"面对网"</span>
+    </div>
+    <p class="desc">
+      P2P 让两个人、两个任务能互相调用；T2T 则把它们组织成一个可协作的网络——团队共享任务、环境与知识，
+      技能与工具在团队内沉淀复用，协作与评审在统一的工作台上流转。以下为方向性规划。
+    </p>
+
+    <div class="vision">
+      <div class="vitem">
+        <div class="t"><span class="dot"></span>团队工作区</div>
+        <div class="d">以团队为单位组织任务与目录，成员共享同一工作空间，按项目/职能分层管理。</div>
+      </div>
+      <div class="vitem">
+        <div class="t"><span class="dot"></span>多人共享任务与看板</div>
+        <div class="d">任务可在成员间指派与流转，看板成为团队共享的状态视图，评审、待办一目了然。</div>
+      </div>
+      <div class="vitem">
+        <div class="t"><span class="dot"></span>角色与权限</div>
+        <div class="d">分享升级为可授权的协作：谁能看、谁能问、谁能改，按角色收敛，而非单一 token。</div>
+      </div>
+      <div class="vitem">
+        <div class="t"><span class="dot"></span>团队级能力资产</div>
+        <div class="d">团队共享 Skills、MCP 与模型配置，个人能力沉淀为团队资产，开箱即用。</div>
+      </div>
+      <div class="vitem">
+        <div class="t"><span class="dot"></span>协作与评审流转</div>
+        <div class="d">任务从进行中到待审核再到完成，支持他人评审、批注与回退，形成可追溯的协作闭环。</div>
+      </div>
+      <div class="vitem">
+        <div class="t"><span class="dot"></span>审计与安全</div>
+        <div class="d">团队内的分享、调用与文件访问可审计；数据边界清晰，敏感信息不外泄。</div>
+      </div>
+    </div>
+    <p class="plan-note">* T2T 尚处规划阶段，具体形态会随 P2P 的落地经验持续调整。</p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap frow">
+    <span class="fbrand">
+      <svg class="mark" viewBox="0 0 512 512" aria-hidden="true">
+        <defs><linearGradient id="fm" x1="0.1" y1="0.1" x2="0.9" y2="0.9">
+          <stop offset="0" stop-color="#38bdf8"/><stop offset="1" stop-color="#2dd4bf"/>
+        </linearGradient></defs>
+        <rect width="512" height="512" rx="116" fill="#12161c"/>
+        <path d="M140 140 H342 L140 306 H342" fill="none" stroke="url(#fm)" stroke-width="64" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M280 256 H412 L280 390 H412" fill="none" stroke="url(#fm)" stroke-width="46" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+      zzwork · 任务工作台
+    </span>
+    <span>S2S 已上线 · P2P 进行中 · T2T 待规划</span>
+  </div>
+</footer>
+
+</body>
+</html>

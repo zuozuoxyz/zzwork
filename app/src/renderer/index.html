@@ -46,7 +46,7 @@
       </div>
       <div style="flex:1"></div>
       <button class="ib upd" id="updateBtn" hidden title="发现新版本"><i data-lucide="circle-arrow-up" style="width:14px;height:14px"></i></button>
-      <button class="ib ib-entry" id="openInboxBtn" title="需求便签 · 记录并归类需求"><i data-lucide="sticky-note" style="width:14px;height:14px"></i><span>需求便签</span></button>
+      <button class="ib ib-entry" id="openInboxBtn" title="需求便签 · 记录并归类需求"><i data-lucide="sticky-note" style="width:14px;height:14px"></i><span>需求便签</span><span class="ibbadge" id="openInboxBadge" hidden></span></button>
       <button class="ib" id="termToggle" title="终端 (Ctrl+`)"><i data-lucide="square-terminal" style="width:14px;height:14px"></i></button>
     </div>
 
@@ -143,7 +143,7 @@
                   <span class="t">需求便签</span>
                   <span class="hint" id="inboxHint">自动保存到工作区 .zzwork/inbox.md</span>
                   <span class="sp"></span>
-                  <button class="btn sm" id="triageBtn"><i data-lucide="list-checks" style="width:13px;height:13px"></i><span id="triageBtnLabel">归类并执行</span></button>
+                  <button class="btn sm" id="triageBtn"><i data-lucide="list-checks" style="width:13px;height:13px"></i><span id="triageBtnLabel">归类</span></button>
                 </div>
                 <textarea id="inboxInput" placeholder="随手记录需求，每行一条；点击右上角归类并执行…" spellcheck="false"></textarea>
                 <div class="inboxreview" id="inboxReview" hidden></div>
@@ -201,7 +201,7 @@
                   <button data-panel="board">画板</button>
                 </div>
                 <span class="sp"></span>
-                <button class="bd-badge hidden" id="boardBadge" title="画板有改动，点击发送给 AI">画板有更新 · 发送给 AI</button>
+                <span class="bd-badge hidden" id="boardBadge" title="画板有改动，在下方输入框补充描述后发送给 AI">画板有更新 · 在下方补充后发送</span>
               </div>
               <div class="sright">
                 <div class="fmhost" id="featureMapHost"></div>
@@ -258,7 +258,7 @@
       <span class="lf" id="stTask">未选择任务</span>
       <span class="s"></span>
       <span id="stRight"></span>
-      <span id="stVersion">zzwork 0.6.1</span>
+      <span id="stVersion">zzwork 0.6.6</span>
     </div>
   </div>
 

@@ -1,6 +1,6 @@
 // 需求便签：工作区顶层记录 + 归类（新建/归入任务）+ 一键执行
 import { invoke, store, onChatEvent } from '../lib/api.js'
-import { state, emit } from '../lib/state.js'
+import { state, emit, on } from '../lib/state.js'
 import { $, esc, ic, taskIcon, debounce, refreshIcons } from '../lib/ui.js'
 import { reloadTasks } from '../lib/data.js'
 import { toast } from '../components/toast.js'
@@ -41,13 +41,15 @@ export function initInboxView() {
   loadInboxRatios().catch(() => {})
   ensureOrder()
   loadInbox()
-  // 有任务 AI 回复结束/发起提问时实时刷新未读与待回答标志（仅当正停留在便签页）
+  // 有任务 AI 回复结束/发起提问时实时刷新入口徽标与未读/待回答标志
   onChatEvent((ev) => {
     if (!ev) return
     if (ev.type !== 'unread' && ev.type !== 'ask' && ev.type !== 'done') return
-    if (state.pane !== 'inbox') return
-    renderInboxBoard().then(() => renderInboxCode()).catch(() => {})
+    updateInboxBadge().catch(() => {})
+    if (state.pane === 'inbox') renderInboxBoard().then(() => renderInboxCode()).catch(() => {})
   })
+  // 已读状态变化（用户查看对话 / 回答提问）时刷新入口徽标
+  on('unread-changed', () => { updateInboxBadge().catch(() => {}) })
 }
 
 let orderPromise = null
@@ -113,6 +115,31 @@ const isAwaiting = (id) => awaitingSet.has(id)
 const unreadBadge = (id) => isAwaiting(id)
   ? '<span class="ibunread ask" title="正在等待你的回答">待回答</span>'
   : isUnread(id) ? '<span class="ibunread" title="有未读的 AI 回复">未读</span>' : ''
+
+// 标题栏「需求便签」入口上的醒目提醒：需处理（待回答）+ 未读任务数，跨 pane 常驻更新
+export async function updateInboxBadge() {
+  const btn = $('#openInboxBtn')
+  const badge = $('#openInboxBadge')
+  if (!btn || !badge) return
+  const visible = new Set(state.tasks
+    .filter((t) => t.scope === 'board' || t.type === 'work' || t.type === 'code')
+    .map((t) => t.id))
+  await refreshUnreadMaps()
+  await refreshAwaiting()
+  let awaiting = 0, unread = 0
+  for (const id of visible) {
+    if (isAwaiting(id)) awaiting++
+    else if (isUnread(id)) unread++
+  }
+  const total = awaiting + unread
+  badge.hidden = total === 0
+  badge.textContent = total === 0 ? '' : (total > 99 ? '99+' : String(total))
+  badge.classList.toggle('ask', awaiting > 0)
+  const parts = []
+  if (awaiting) parts.push(`${awaiting} 个任务待回答`)
+  if (unread) parts.push(`${unread} 个任务有未读回复`)
+  btn.title = total ? `需求便签 · ${parts.join('，')}` : '需求便签 · 记录并归类需求'
+}
 
 // —— 分栏拖拽：左右宽（水平分隔条）+ 左上高（垂直分隔条），比例持久化 ——
 function applyInboxRatios() {
@@ -461,7 +488,7 @@ function setTriageButton(mode) {
   const btn = $('#triageBtn')
   const label = $('#triageBtnLabel')
   if (!btn) return
-  if (label) label.textContent = mode === 'running' ? '运行中' : mode === 'cancel' ? '取消' : '归类并执行'
+  if (label) label.textContent = mode === 'running' ? '归类中' : mode === 'cancel' ? '取消' : '归类'
   btn.disabled = mode === 'running'
   btn.classList.toggle('running', mode === 'running')
   btn.classList.toggle('cancelling', mode === 'cancel')
@@ -510,10 +537,9 @@ function enterReview(items, baseContent) {
     </div>`
   }).join('')
   panel.innerHTML = `
-    <div class="ir-head">归类结果 · 新建任务（看板 / 短期）或忽略（已有相关任务）；确认后该行从便签移除</div>
+    <div class="ir-head">归类结果 · 新建任务（看板 / 短期）或忽略（已有相关任务）；确认后把需求写入该任务的「会话管理」提示词，并从便签移除</div>
     <div class="ir-rows">${rows}</div>
     <div class="ir-foot">
-      <label class="mf inline" style="margin:0"><input type="checkbox" id="ir-exec" checked> 立即执行</label>
       <span class="sp"></span>
       <span id="irCount" class="hint"></span>
     </div>`
@@ -564,10 +590,9 @@ async function confirmReviewRow(row) {
   }
   const cbtn = row.querySelector('.ir-confirm')
   if (cbtn) cbtn.disabled = true
-  const execute = $('#ir-exec') ? $('#ir-exec').checked : true
   let r
   try {
-    r = await inboxInvoke('apply', { items: [it], execute })
+    r = await inboxInvoke('apply', { items: [it] })
   } catch (e) {
     toast('应用失败：' + e.message, 'err', 4000)
     if (cbtn) cbtn.disabled = false
@@ -585,7 +610,7 @@ async function confirmReviewRow(row) {
   emit('tasks-changed')
   renderInboxBoard()
   renderInboxCode()
-  toast('已确认：' + (ok.taskName || it.text))
+  toast('已归类：' + (ok.taskName || it.text))
   row.remove()
   updateReviewCount()
   maybeFinishReview()

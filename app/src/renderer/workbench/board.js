@@ -79,7 +79,8 @@ export function initBoard() {
     `<button class="ib danger" id="bdClear" title="清空画板">${ic('trash-2', 14)}</button>` +
     `</div>` +
     `<div class="bd-float hidden" id="bdFloat"></div>` +
-    `</div>`
+    `</div>` +
+    `<div class="fm-input bd-input"><input id="bdAsk" placeholder="补充描述，和画板一起发给 AI…" spellcheck="false"><button class="ib on" id="bdSend" title="连同画板一起发送给 AI">${ic('send', 14)}</button></div>`
   refreshIcons()
   svg = $('#bdSvg')
   root = $('#bdRoot')
@@ -102,11 +103,11 @@ export function initBoard() {
     view = { scale: 1, tx: 0, ty: 0 }
     render(); scheduleSave()
   })
-  const badge = $('#boardBadge')
-  if (badge) badge.addEventListener('click', () => {
-    sentHash = JSON.stringify(data)
-    updateBadge()
-    sendChatText('【画板】我已更新画板，请查看画板内容并据此回应或执行。')
+  const bdSend = $('#bdSend')
+  if (bdSend) bdSend.addEventListener('click', sendBoardAsk)
+  const bdAsk = $('#bdAsk')
+  if (bdAsk) bdAsk.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendBoardAsk() }
   })
   $('#bdFloat').addEventListener('click', (e) => {
     const b = e.target.closest('[data-act]')
@@ -872,6 +873,22 @@ function updateBadge() {
   b.classList.toggle('hidden', !dirty)
 }
 
+// 画板补充描述：连同当前画板内容一起发给 AI（画板摘要由主进程在发送时注入）
+async function sendBoardAsk() {
+  if (!taskId) return
+  flushEditor()
+  const el = $('#bdAsk')
+  const text = (el && el.value || '').trim()
+  // 先落地画板，确保主进程注入的是最新内容（否则会拿到 700ms 防抖前的旧版本）
+  clearTimeout(saveTimer)
+  try { await doSave(taskId) } catch {}
+  sentHash = JSON.stringify(data)
+  updateBadge()
+  if (el) el.value = ''
+  const base = '【画板】我已更新画板，请查看画板内容并据此回应或执行。'
+  sendChatText(text ? base + '\n\n我的补充说明：' + text : base)
+}
+
 function parseCanvas(raw) {
   if (!raw) return { v: 2, shapes: [], edges: [] }
   let d = null
@@ -886,7 +903,9 @@ function parseCanvas(raw) {
 
 export async function renderBoard(id) {
   flushEditor()
+  const prev = taskId
   taskId = id
+  if (id !== prev) { const a = $('#bdAsk'); if (a) a.value = '' }
   sel = new Set(); selEdges = new Set(); drag = null; hoverId = null; hoverAnchor = null; closeEditor()
   if (!inited) initBoard()
   const bt = $('#bdTitle')

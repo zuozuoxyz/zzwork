@@ -91,7 +91,8 @@ function list() {
   const S = getStore()
   return S.listTasks()
     .filter((t) => (t.scope || 'long') === 'board')
-    .sort((a, b) => (ORDER[a.status] ?? 1) - (ORDER[b.status] ?? 1) || String(a.created_at).localeCompare(String(b.created_at)))
+    .sort((a, b) => (ORDER[a.status] ?? 1) - (ORDER[b.status] ?? 1)
+      || String(b.updated_at || b.created_at || '').localeCompare(String(a.updated_at || a.created_at || '')))
     .map((t) => ({ ...t, meta: readMeta(t) }))
 }
 

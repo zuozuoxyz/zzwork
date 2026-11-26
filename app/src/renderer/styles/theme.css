@@ -82,6 +82,18 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
 #zzv .ib.ib-entry:hover { color: var(--fg); border-color: var(--bd2); background: rgba(255,255,255,.08) }
 #zzv .ib.ib-entry.on { color: var(--brand); border-color: rgba(45,212,191,.5); background: rgba(45,212,191,.12) }
 #zzv .ib.ib-entry span { white-space: nowrap }
+/* 需求便签入口：有待回答/未读任务时的醒目提醒徽标（红色脉冲；待回答转琥珀色） */
+#zzv .ib.ib-entry .ibbadge { --ibp: 239,68,68; flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+  min-width: 16px; height: 16px; padding: 0 4px; margin-left: 1px; border-radius: 9px;
+  font-size: 10px; font-weight: 700; line-height: 1; color: #fff; background: rgb(var(--ibp));
+  font-variant-numeric: tabular-nums; animation: ibpulse 1.5s ease-out infinite }
+#zzv .ib.ib-entry .ibbadge[hidden] { display: none }
+#zzv .ib.ib-entry .ibbadge.ask { --ibp: 245,158,11 }
+@keyframes ibpulse {
+  0% { box-shadow: 0 0 0 0 rgba(var(--ibp), .6) }
+  70% { box-shadow: 0 0 0 5px rgba(var(--ibp), 0) }
+  100% { box-shadow: 0 0 0 0 rgba(var(--ibp), 0) }
+}
 /* 有新版本时出现在终端按钮左侧 */
 #zzv .ib.upd { position: relative; color: var(--brand) }
 #zzv .ib.upd:hover { color: #7dd3fc; background: rgba(14,165,233,.14) }
@@ -405,9 +417,8 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
   color: var(--faint); font-size: 11.5px; text-align: center; padding: 20px; pointer-events: none; line-height: 1.8 }
 #zzv .bd-badge { display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 11px; border-radius: 12px;
   border: 1px solid rgba(14,165,233,.35); background: rgba(14,165,233,.16); color: #7dd3fc; font-size: 11px;
-  cursor: pointer; font-family: inherit; animation: bdpulse 2s ease-in-out infinite }
+  cursor: default; font-family: inherit; animation: bdpulse 2s ease-in-out infinite }
 #zzv .bd-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #38bdf8 }
-#zzv .bd-badge:hover { background: rgba(14,165,233,.26); color: #bae6fd }
 @keyframes bdpulse { 0%,100% { box-shadow: 0 0 0 0 rgba(56,189,248,0) } 50% { box-shadow: 0 0 0 4px rgba(56,189,248,.09) } }
 #zzv .bd-svg { touch-action: none }
 #zzv .bd-shape { cursor: pointer }
@@ -528,10 +539,16 @@ html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg); }
 #zzv .shellpanel { display: none; max-width: 680px; margin: 0 auto 8px; border: 1px solid var(--bd);
   background: var(--card); border-radius: 8px; padding: 6px 9px 7px }
 #zzv .shellpanel.on { display: block }
-#zzv .shellpanel .shhead { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--dim) }
+#zzv .shellpanel .shhead { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--dim); cursor: pointer; user-select: none }
+#zzv .shellpanel .shhead:hover .sht { color: var(--fg) }
+#zzv .shellpanel .shcaret { flex: 0 0 auto; width: 9px; text-align: center; color: var(--faint); font-size: 9px }
 #zzv .shellpanel .sht { font-weight: 500 }
 #zzv .shellpanel .shn { margin-left: auto; font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums }
-#zzv .shellpanel .shlist { display: flex; flex-direction: column; gap: 3px; margin-top: 4px; max-height: 140px; overflow-y: auto }
+#zzv .shellpanel .shstopall { flex: 0 0 auto; height: 20px; padding: 0 8px; border-radius: 5px; border: 1px solid var(--bd2);
+  background: transparent; color: var(--dim); font-size: 10.5px; cursor: pointer }
+#zzv .shellpanel .shstopall:hover { color: #f87171; border-color: rgba(248,113,113,.4) }
+#zzv .shellpanel .shlist { display: none; flex-direction: column; gap: 3px; margin-top: 4px; max-height: 140px; overflow-y: auto }
+#zzv .shellpanel.open .shlist { display: flex }
 #zzv .shellpanel .shrow { display: flex; align-items: center; gap: 7px; min-width: 0; font-size: 11.2px; color: var(--dim) }
 #zzv .shellpanel .shdot { flex: 0 0 auto; width: 6px; height: 6px; border-radius: 50%; background: var(--faint) }
 #zzv .shellpanel .shcmd { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;

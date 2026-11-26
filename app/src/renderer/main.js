@@ -10,7 +10,7 @@ import { initSkillsView, renderSkills, renderSkillDetail } from './views/skills.
 import { initMcpView, renderMcp, renderMcpDetail } from './views/mcp.js'
 import { initModelsView, renderModels, renderModelDetail, renderProviderDetail } from './views/models.js'
 import { renderSettings } from './views/settings.js'
-import { initInboxView, renderInboxBoard, renderInboxCode } from './views/inbox.js'
+import { initInboxView, renderInboxBoard, renderInboxCode, updateInboxBadge } from './views/inbox.js'
 import { renderBoard, initBoardView, mountCardChat } from './views/board.js'
 import { renderTabs, showPane } from './workbench/tabs.js'
 import { renderInfo } from './workbench/info.js'
@@ -45,6 +45,20 @@ function cleanupCardChat() {
 }
 function cardById(id) {
   return state.boardCards.find((c) => c.id === id) || state.tasks.find((t) => t.id === id) || null
+}
+// 终端跟随当前工作上下文：查看卡片对话或卡片工作目录文件时用卡片任务（cwd 即卡片目录），
+// 其余情况用当前任务。避免在看板任务上打开终端却落在上一个普通任务的目录里。
+let termTask = null
+function termContextTaskId() {
+  const inCard = (state.pane === 'card' || state.pane === 'file') && state.cardActive &&
+    (state.mode === 'card' || state.mode === 'board')
+  return inCard ? state.cardActive : state.taskId
+}
+function syncTerminal() {
+  const id = termContextTaskId()
+  if (id === termTask) return
+  termTask = id
+  attachTaskTerminal(id)
 }
 // 离开看板上下文（进入设置/详情/便签/切换任务）时放弃卡片标签，避免其残留后再次出现
 function abandonCardTabs() {
@@ -112,6 +126,7 @@ function activateCardTab(id) {
   const card = cardById(id)
   if (!card) return
   if (state.cardActive !== id) closeAllFiles()
+  state.mode = 'card'
   state.cardActive = id
   renderTabs()
   showPane('card')
@@ -194,6 +209,7 @@ async function selectTask(id) {
     state.mode = 'task'
     state.item = null
     state.changes = []
+    setView('projects')
     emit('changes-updated')
     renderProjects()
     renderTabs()
@@ -203,7 +219,7 @@ async function selectTask(id) {
     showPane('info')
     const stTask = $('#stTask')
     if (stTask) stTask.textContent = '未选择任务'
-    attachTaskTerminal(null)
+    syncTerminal()
     await renderProjectFiles()
     return
   }
@@ -224,6 +240,7 @@ async function selectTask(id) {
   state.mode = 'task'
   state.item = null
   state.pane = 'info'
+  setView('projects')
   try { await store('settings.set', { key: 'activeTaskId', value: id }) } catch {}
   renderProjects()
   await renderProjectFiles()
@@ -233,7 +250,7 @@ async function selectTask(id) {
   let autoAi = '1'
   try { autoAi = await store('settings.get', { key: 'ui:autoOpenAi', dflt: '1' }) } catch {}
   showPane(autoAi === '0' ? 'info' : 'ai')
-  attachTaskTerminal(id)
+  syncTerminal()
 }
 
 function openItem(payload) {
@@ -293,6 +310,7 @@ async function openInbox() {
   renderTabs()
   await renderInboxBoard()
   renderInboxCode()
+  updateInboxBadge().catch(() => {})
 }
 
 // 离开便签：回到进入前的任务 pane（便签没有 × 按钮，靠活动栏/选择任务切走）
@@ -384,9 +402,15 @@ function bindEvents() {
   on('pane-changed', (name) => {
     // 编辑区在「看板」与「卡片对话」间切换时，左侧栏同步切回看板配置/工作目录树
     syncBoardSide()
+    // 终端跟随当前工作上下文：卡片上下文用卡片目录，其余用当前任务
+    syncTerminal()
     // 便签激活时隐藏左侧栏，编辑区更宽；标题栏入口同步高亮
     const root = document.getElementById('zzv')
-    if (root) root.classList.toggle('inbox-only', name === 'inbox')
+    if (root) {
+      root.classList.toggle('inbox-only', name === 'inbox')
+      // 便签、看板为整页上下文，不显示底部终端
+      root.classList.toggle('hide-term', name === 'inbox' || name === 'board')
+    }
     const ib = $('#openInboxBtn'); if (ib) ib.classList.toggle('on', name === 'inbox')
     if (name === 'ai' && state.taskId) refreshChatHeader()
   })
@@ -460,6 +484,7 @@ async function boot() {
     if (first) await selectTask(first)
     else await selectTask(null)
 
+    updateInboxBadge().catch(() => {})
     refreshIcons()
 
     // 后台刷新远端 Skills 与各环境执行体状态，不阻塞界面

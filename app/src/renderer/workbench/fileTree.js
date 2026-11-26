@@ -215,7 +215,7 @@ async function buildTree(body, host, dirPath, depth, after) {
         if (fi) fi.innerHTML = ic(open ? 'folder-open' : 'folder', 13)
         refreshIcons()
         if (open) {
-          await buildTree(body, host, task, it.path, depth + 1, row)
+          await buildTree(body, host, it.path, depth + 1, row)
           refreshIcons()
         } else {
           removeDescendants(body, it.path)

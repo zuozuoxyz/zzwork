@@ -422,19 +422,26 @@ export default [
     }
   },
   {
-    name: '后台 Shell 面板：每会话展示、查看与停止',
+    name: '后台 Shell 面板：默认折叠、展开查看、全部停止',
     async run(app) {
       const name = '后台Shell任务'
       const t = await bindTask(app, name, { agent_id: 'claude-code', model_id: '' })
       await selectTask(app, name)
       await openAiTab(app)
       await sendChat(app, '[[BG]] 起个服务')
-      await app.waitFor(`document.querySelectorAll('#chatShells.on .shrow').length >= 1`, 15000, '后台面板出现')
+      await app.waitFor(`document.querySelectorAll('#chatShells.on').length === 1`, 15000, '后台面板出现')
+      // 默认折叠：只显示头部一行，列表隐藏
+      await app.waitFor(`getComputedStyle(document.querySelector('#chatShells .shlist')).display === 'none'`, 5000, '默认折叠隐藏列表')
+      await app.waitFor(`!!document.querySelector('#chatShells [data-shell-stopall]')`, 5000, '全部停止按钮')
+      // 点开头部展开，看到具体 shell
+      await app.click('#chatShells [data-shell-toggle]')
+      await app.waitFor(`getComputedStyle(document.querySelector('#chatShells .shlist')).display !== 'none'`, 5000, '展开后列表可见')
       await app.waitFor(`[...document.querySelectorAll('#chatShells .shcmd')].some(e=>e.textContent.includes('npm run dev'))`, 5000, '后台命令显示')
       await app.waitFor(`!!document.querySelector('#chatShells .shview')`, 5000, '查看详情入口')
       await app.waitFor(`!!document.querySelector('#chatShells [data-shell-stop]')`, 5000, '停止按钮')
-      await app.click('#chatShells [data-shell-stop]')
-      await app.waitFor(`!document.querySelector('#chatShells.on')`, 8000, '停止后条目移除、面板隐藏')
+      // 全部停止：清空并折叠隐藏
+      await app.click('#chatShells [data-shell-stopall]')
+      await app.waitFor(`!document.querySelector('#chatShells.on')`, 8000, '全部停止后条目移除、面板隐藏')
       const sess = (await app.store('sessions.list', { taskId: t.id }))[0]
       const meta = String(sess.meta || '')
       assert.ok(!meta.includes('npm run dev'), '停止后的后台 shell 不应再保留: ' + meta)

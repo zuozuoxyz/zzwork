@@ -9,12 +9,20 @@ protocol.registerSchemesAsPrivileged([
 ])
 
 app.setName('zzwork')
+// 固定 AUMID：与 electron-builder 的 appId 一致，避免开发态任务栏回退成 Electron 默认图标
+if (process.platform === 'win32') { try { app.setAppUserModelId('com.zzwork.app') } catch {} }
 
 // 开发态走 src/renderer/public，打包后走 out/renderer（electron-vite 会复制 public）
-const APP_ICON = [
+// Windows 任务栏/窗口图标优先用 .ico，缩放更清晰
+const ICON_PNG = [
   path.join(__dirname, '../renderer/icon.png'),
   path.join(__dirname, '../../src/renderer/public/icon.png')
 ].find((p) => fs.existsSync(p))
+const ICON_ICO = [
+  path.join(__dirname, '../renderer/icon.ico'),
+  path.join(__dirname, '../../build/icon.ico')
+].find((p) => fs.existsSync(p))
+const APP_ICON = (process.platform === 'win32' && ICON_ICO) ? ICON_ICO : ICON_PNG
 
 if (!app.requestSingleInstanceLock()) {
   app.quit()

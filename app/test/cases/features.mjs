@@ -465,6 +465,12 @@ export default [
       const reply = replyRaw ? JSON.parse(replyRaw) : {}
       assert.ok(reply[t.id] > 0, '应记录该任务的回复结束时间')
 
+      // 标题栏「需求便签」入口应出现醒目的未读数量徽标（无需打开便签页）
+      await app.waitFor(`(() => {
+        const b = document.querySelector('#openInboxBadge')
+        return b && !b.hidden && Number(b.textContent) >= 1
+      })()`, 8000, '入口徽标显示未读数量')
+
       // 确保未读（清掉可能残留的已读时间）
       await app.store('settings.set', { key: 'ui:taskRead', value: '{}' })
 
@@ -476,8 +482,13 @@ export default [
         return !!c && !!c.querySelector('.ibunread')
       })()`, 8000, '该任务显示未读标志')
 
-      // 模拟已读：已读时间晚于回复结束时间
-      await app.store('settings.set', { key: 'ui:taskRead', value: JSON.stringify({ [t.id]: Date.now() + 1000 }) })
+      // 模拟全部已读：所有已回复任务的已读时间都晚于回复结束时间
+      const replyAllRaw = await app.store('settings.get', { key: 'ui:taskReplyAt', dflt: '' })
+      const replyAll = replyAllRaw ? JSON.parse(replyAllRaw) : {}
+      const readAll = {}
+      for (const k of Object.keys(replyAll)) readAll[k] = Date.now() + 100000
+      readAll[t.id] = Date.now() + 100000
+      await app.store('settings.set', { key: 'ui:taskRead', value: JSON.stringify(readAll) })
       await app.click('.abi[data-view="projects"]')
       await app.waitFor(`!document.querySelector('.tab[data-pane="inbox"]')`, 5000, '离开便签页')
       await app.click('#openInboxBtn')
@@ -486,6 +497,11 @@ export default [
         const c = document.querySelector('#inboxBoard .ibcard[data-task="${t.id}"]')
         return !!c && !c.querySelector('.ibunread')
       })()`, 8000, '已读后未读标志消失')
+      // 已读后入口徽标也应隐藏（打开便签会重算未读）
+      await app.waitFor(`(() => {
+        const b = document.querySelector('#openInboxBadge')
+        return b && b.hidden
+      })()`, 8000, '已读后入口徽标隐藏')
       await app.click('.abi[data-view="projects"]')
     }
   },

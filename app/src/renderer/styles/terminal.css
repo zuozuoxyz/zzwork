@@ -2,6 +2,8 @@
 #zzv .term-panel { display: none; flex-direction: column; flex: 0 0 auto; height: 260px; min-height: 120px;
   background: var(--bg); border-top: 1px solid var(--bd); position: relative }
 #zzv .term-panel.on { display: flex }
+/* 需求便签、看板为整页上下文：即使终端此前处于展开态也不显示，离开后按原状态恢复 */
+#zzv.hide-term .term-panel { display: none }
 #zzv .term-grip { position: absolute; left: 0; right: 0; top: -3px; height: 6px; cursor: ns-resize; z-index: 5 }
 #zzv .term-grip:hover { background: rgba(14, 165, 233, .25) }
 #zzv .term-head { display: flex; align-items: center; height: 30px; flex: 0 0 auto; padding: 0 6px;

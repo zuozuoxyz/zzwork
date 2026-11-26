@@ -212,6 +212,16 @@ function clearPromptEditor() {
   const editor = $('#sessionPrompt')
   if (editor) editor.textContent = ''
 }
+// 发送即清空：提示词进入 AI 对话后应彻底清掉，包括持久化存档（供主进程当系统提示词用的
+// session:prompt 与还原用的 session:promptdoc）。否则切回本任务时 renderSession 会从存档把它
+// 重新还原出来，且下一轮仍会被当作「本次会话提示词」反复注入。
+async function clearPersistedPrompt(id) {
+  if (!id) return
+  try {
+    await store('settings.set', { key: 'session:prompt:' + id, value: '' })
+    await store('settings.set', { key: 'session:promptdoc:' + id, value: '' })
+  } catch {}
+}
 
 async function sendPrompt() {
   if (!taskId) return
@@ -223,7 +233,10 @@ async function sendPrompt() {
   try {
     const ok = await sendChatMessage({ text, attachments })
     await renderSessionHistory(taskId)
-    if (!ok) toast('发送失败', 'err')
+    if (!ok) { toast('发送失败', 'err'); return }
+    // 成功进入 AI 对话后清空：先丢弃尚未落库的旧内容存档，再抹掉已持久化的提示词
+    if (savePrompt && savePrompt.cancel) savePrompt.cancel()
+    await clearPersistedPrompt(taskId)
   } finally { if (sendBtn) sendBtn.disabled = false }
 }
 

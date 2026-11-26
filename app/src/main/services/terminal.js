@@ -142,6 +142,11 @@ async function create({ taskId, cols, rows, paneId }) {
   } else {
     let cwd = task.path
     let warn = ''
+    // 看板/短期任务的目录由应用托管，首次使用前可能尚未创建；开终端前先建好，
+    // 避免错误地回退到用户主目录（让终端落在该任务自己的目录里）
+    if ((task.scope === 'board' || task.type === 'work') && cwd && !/^ssh:\/\//i.test(cwd) && !/^\\\\wsl/i.test(cwd)) {
+      try { fs.mkdirSync(cwd, { recursive: true }) } catch {}
+    }
     if (!cwd || !fs.existsSync(cwd) || /^ssh:\/\//i.test(cwd) || /^\\\\wsl/i.test(cwd)) {
       warn = '[zzwork] 任务目录不可用，已在用户主目录启动\r\n'
       cwd = os.homedir()

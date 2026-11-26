@@ -13,6 +13,8 @@ let taskId = null
 let sessionId = null
 let info = null
 let messages = []
+// 与 messages 一一对应的已挂载 DOM 元素；用于增量渲染，避免每次事件都重建整段历史
+let msgEls = []
 let running = false
 let runId = null
 let orchestrateActive = false
@@ -24,6 +26,8 @@ let mention = { open: false, items: [], idx: 0, start: 0, end: 0, dir: '', curre
 let pendingAttachments = []
 // 当前会话的后台 shell（Claude run_in_background 启动的常驻命令）
 let shells = []
+// 后台 shell 面板默认折叠，只显示「后台 Shell」这一行，点开才展开全部
+let shellsOpen = false
 // 每个任务各自保留未发送的输入草稿，切换任务时互不串台
 const drafts = new Map()
 // 运行中排队待发送的消息：按会话隔离，AI 一轮结束后自动逐条发出
@@ -265,11 +269,15 @@ function renderShells() {
   const el = $('#chatShells')
   if (!el) return
   el.classList.toggle('on', shells.length > 0)
-  if (!shells.length) { el.innerHTML = ''; return }
+  if (!shells.length) { el.innerHTML = ''; shellsOpen = false; el.classList.remove('open'); return }
   const live = shells.filter((s) => s.status === 'running').length
   const rows = shells.slice(-8).reverse().map(shellRow).join('')
-  el.innerHTML = `<div class="shhead">${ic('terminal', 13)}<span class="sht">后台 Shell</span>
-    <span class="shn">${live} 运行中${shells.length > live ? ' · 共 ' + shells.length + ' 条' : ''}</span></div>
+  el.classList.toggle('open', shellsOpen)
+  el.innerHTML = `<div class="shhead" data-shell-toggle title="${shellsOpen ? '收起' : '展开'}后台 Shell">
+      <span class="shcaret">${shellsOpen ? '▾' : '▸'}</span>${ic('terminal', 13)}<span class="sht">后台 Shell</span>
+      <span class="shn">${live} 运行中${shells.length > live ? ' · 共 ' + shells.length + ' 条' : ''}</span>
+      ${live ? '<button class="shstopall" data-shell-stopall>全部停止</button>' : ''}
+    </div>
     <div class="shlist">${rows}</div>`
   refreshIcons()
 }
@@ -302,18 +310,41 @@ export function initChatView() {
   })
   const shEl = $('#chatShells')
   if (shEl) shEl.addEventListener('click', async (e) => {
-    const btn = e.target.closest && e.target.closest('[data-shell-stop]')
-    if (!btn) return
-    const id = btn.getAttribute('data-shell-stop')
-    btn.disabled = true
-    try {
-      await invoke('chat', 'shellStop', { taskId, sessionId, id })
-      shells = shells.filter((s) => s.id !== id)
+    const stopAll = e.target.closest && e.target.closest('[data-shell-stopall]')
+    if (stopAll) {
+      const running = shells.filter((s) => s.status === 'running')
+      if (!running.length) return
+      stopAll.disabled = true
+      const stopped = []
+      for (const s of running) {
+        try { await invoke('chat', 'shellStop', { taskId, sessionId, id: s.id }); stopped.push(s.id) } catch {}
+      }
+      const gone = new Set(stopped)
+      shells = shells.filter((s) => !gone.has(s.id))
       renderShells()
-      toast('已停止后台 shell')
-    } catch (er) {
-      btn.disabled = false
-      toast('停止失败：' + er.message, 'err')
+      if (stopped.length) toast(`已停止 ${stopped.length} 个后台 shell`)
+      else toast('停止失败', 'err')
+      return
+    }
+    const btn = e.target.closest && e.target.closest('[data-shell-stop]')
+    if (btn) {
+      const id = btn.getAttribute('data-shell-stop')
+      btn.disabled = true
+      try {
+        await invoke('chat', 'shellStop', { taskId, sessionId, id })
+        shells = shells.filter((s) => s.id !== id)
+        renderShells()
+        toast('已停止后台 shell')
+      } catch (er) {
+        btn.disabled = false
+        toast('停止失败：' + er.message, 'err')
+      }
+      return
+    }
+    // 点击头部（图标/标题/计数）切换展开、折叠
+    if (e.target.closest && e.target.closest('[data-shell-toggle]')) {
+      shellsOpen = !shellsOpen
+      renderShells()
     }
   })
   // 运行中 shell 的耗时常驻刷新
@@ -432,10 +463,11 @@ async function submitAsk(btn) {
   try {
     const ok = await invoke('chat', 'answer', { runId: run, requestId, answers })
     if (!ok) { toast('该提问已失效', 'warn'); btn.disabled = false; return }
-    const m = messages.find((x) => x.kind === 'ask' && (x.meta || {}).requestId === requestId)
-    if (m) m.answered = answers
-    renderAll()
+    const mi = messages.findIndex((x) => x.kind === 'ask' && (x.meta || {}).requestId === requestId)
+    if (mi >= 0) messages[mi].answered = answers
+    rerenderAt(mi)
     scrollBottom(false)
+    emit('unread-changed')
   } catch (e) { btn.disabled = false; toast('提交失败：' + e.message, 'err') }
 }
 
@@ -463,6 +495,7 @@ function restoreDraft(id) {
 function resetHeader() {
   info = null
   messages = []
+  msgEls = []
   running = false
   runId = null
   orchestrateActive = false
@@ -905,14 +938,56 @@ function renderAll() {
   const inner = $('#chatInner')
   if (!messages.length) {
     inner.innerHTML = `<div class="empty">还没有对话。在下方输入需求，Enter 发送。</div>`
+    msgEls = []
     return
   }
   inner.innerHTML = messages.map(messageHtml).join('')
+  msgEls = Array.from(inner.children)
   inner.querySelectorAll('.abody').forEach((b) => {
     highlightIn(b)
     enhanceMarkdown(b, { root: taskRoot() })
   })
   refreshIcons()
+}
+
+// 挂载单条消息元素：只对这一条做代码高亮与富内容增强（避免整段历史反复处理）
+function mountMessage(m) {
+  const tmp = document.createElement('div')
+  tmp.innerHTML = messageHtml(m)
+  const el = tmp.firstElementChild || document.createElement('div')
+  el.querySelectorAll('.abody').forEach((b) => {
+    highlightIn(b)
+    enhanceMarkdown(b, { root: taskRoot() })
+  })
+  return el
+}
+
+// 增量渲染：从 from 起把新增消息追加进对话区；DOM 与 messages 未对齐时回退整段渲染
+function renderNew(from) {
+  const inner = $('#chatInner')
+  if (!inner) return
+  if (msgEls.length !== from) { renderAll(); return }
+  if (inner.firstElementChild && inner.firstElementChild.classList.contains('empty')) inner.innerHTML = ''
+  for (let i = from; i < messages.length; i++) {
+    const el = mountMessage(messages[i])
+    inner.appendChild(el)
+    msgEls.push(el)
+  }
+  refreshIcons()
+}
+
+// 就地替换第 i 条消息（用于流式结束定格、回答卡片更新等 mutation）
+function rerenderAt(i) {
+  if (i < 0 || i >= messages.length) return
+  if (msgEls.length !== messages.length) { renderAll(); return }
+  const old = msgEls[i]
+  const el = mountMessage(messages[i])
+  if (old && old.parentNode) { old.replaceWith(el); msgEls[i] = el; refreshIcons() }
+  else renderAll()
+}
+
+function rerenderLast() {
+  if (messages.length) rerenderAt(messages.length - 1)
 }
 
 function scrollBottom(force) {
@@ -1016,29 +1091,37 @@ export function handleEvent(ev) {
   if (type === 'featuremap') { emit('featuremap-updated', { taskId: ev.taskId, map: ev.map }); return }
   if (type === 'aux') {
     const meta = { title: ev.title || '辅助处理', status: ev.status || 'done', summary: ev.summary || '', details: ev.details || '' }
-    const existing = ev.messageId ? messages.find((m) => m.id === ev.messageId) : null
-    if (existing) { existing.kind = 'aux'; existing.role = 'assistant'; existing.meta = meta; existing.pending = false; existing.stream = false }
-    else messages.push({ id: ev.messageId || ('aux-' + Date.now()), role: 'assistant', kind: 'aux', content: '', meta })
-    renderAll()
+    const existingIdx = ev.messageId ? messages.findIndex((m) => m.id === ev.messageId) : -1
+    if (existingIdx >= 0) {
+      const existing = messages[existingIdx]
+      existing.kind = 'aux'; existing.role = 'assistant'; existing.meta = meta; existing.pending = false; existing.stream = false
+      rerenderAt(existingIdx)
+    } else {
+      const from = messages.length
+      messages.push({ id: ev.messageId || ('aux-' + Date.now()), role: 'assistant', kind: 'aux', content: '', meta })
+      renderNew(from)
+    }
     scrollBottom(true)
     return
   }
   if (type === 'board-sent') { emit('board-sent', ev.taskId); return }
   if (type === 'context') {
+    const from = messages.length
     messages.push({
       id: ev.messageId, role: 'assistant', kind: 'context', content: ev.summary || '',
       meta: { summary: ev.summary, details: ev.details, count: ev.count }
     })
-    renderAll()
+    renderNew(from)
     scrollBottom(true)
     return
   }
   if (type === 'diff') {
+    const from = messages.length
     messages.push({
       id: ev.messageId, role: 'assistant', kind: 'diff', content: ev.summary || '',
       meta: { files: ev.files || [], note: ev.note || '' }
     })
-    renderAll()
+    renderNew(from)
     scrollBottom(true)
     return
   }
@@ -1055,6 +1138,7 @@ export function handleEvent(ev) {
     return
   }
   if (type === 'user') {
+    const from = messages.length
     messages.push({ id: ev.messageId, role: 'user', kind: 'text', content: ev.text, meta: { attachments: ev.attachments || [] } })
     // 立即给出“思考中…”占位，避免执行体启动的几秒空白
     if (running && !messages.some((m) => m.stream)) {
@@ -1063,7 +1147,7 @@ export function handleEvent(ev) {
         stream: true, pending: true, startedAt: Date.now(), meta: {}
       })
     }
-    renderAll()
+    renderNew(from)
     scrollBottom(true)
     return
   }
@@ -1128,19 +1212,22 @@ export function handleEvent(ev) {
     if (messages.length && messages[messages.length - 1].stream && messages[messages.length - 1].pending
       && !messages[messages.length - 1].content && !(messages[messages.length - 1].parts || []).length) {
       messages.pop()
+      if (msgEls.length === messages.length + 1) { const g = msgEls.pop(); if (g && g.parentNode) g.remove() }
     }
     const last = messages[messages.length - 1]
     if (ev.error) {
+      const from = messages.length
       messages.push({ role: 'assistant', kind: 'error', content: '出错：' + ev.error, meta: {} })
-      renderAll()
+      renderNew(from)
       scrollBottom(true)
       return
     }
     if (last && last.stream) {
       last.stream = false
       closeStreamMsg(last, ev)
-      renderAll()
+      rerenderLast()
     } else if (ev.content) {
+      const from = messages.length
       messages.push({
         role: 'assistant', kind: 'text', content: ev.content,
         meta: {
@@ -1148,7 +1235,7 @@ export function handleEvent(ev) {
           inputTokens: ev.inputTokens, outputTokens: ev.outputTokens, cachedTokens: ev.cachedTokens
         }
       })
-      renderAll()
+      renderNew(from)
     }
     scrollBottom(true)
     if (!wasOrchestrate) refreshChatHeader()
@@ -1166,10 +1253,12 @@ export function handleEvent(ev) {
     }
     if (idx >= 0) {
       messages[idx] = { ...messages[idx], meta: { ...(messages[idx].meta || {}), ...meta } }
+      rerenderAt(idx)
     } else {
+      const from = messages.length
       messages.push({ id: ev.messageId, role: 'assistant', kind: 'subagent', content: '', meta })
+      renderNew(from)
     }
-    renderAll()
     scrollBottom(false)
     return
   }
@@ -1214,12 +1303,13 @@ export function handleEvent(ev) {
 function ensureStreamMsg() {
   let last = messages[messages.length - 1]
   if (!last || last.role !== 'assistant' || last.kind !== 'text' || !last.stream) {
+    const from = messages.length
     last = {
       role: 'assistant', kind: 'text', content: '', thinking: '', steps: [], parts: [], plan: [],
       stream: true, startedAt: Date.now(), meta: {}
     }
     messages.push(last)
-    renderAll()
+    renderNew(from)
     scrollBottom(true)
   }
   return last

@@ -3,7 +3,7 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { invoke, store } from '../lib/api.js'
-import { on } from '../lib/state.js'
+import { state, on } from '../lib/state.js'
 import { $, refreshIcons } from '../lib/ui.js'
 import { toast } from '../components/toast.js'
 import { showContextMenu } from '../components/contextMenu.js'
@@ -92,11 +92,17 @@ function persist() {
 }
 
 // 顶部终端按钮的高亮跟随「当前任务」的展开态，而非全局
+// 需求便签/看板为整页上下文，不显示终端
+function termBlocked() {
+  return state.pane === 'inbox' || state.pane === 'board'
+}
+
 function syncToggle() {
   const toggle = $('#termToggle')
   if (!toggle) return
   const ts = currentTaskId ? tasks.get(currentTaskId) : null
-  toggle.classList.toggle('on', !!(ts && ts.open))
+  // 便签/看板页面不显示终端：即使此前展开也不高亮，且不允许在此页打开
+  toggle.classList.toggle('on', !!(ts && ts.open) && !termBlocked())
 }
 
 function saveUi() {
@@ -496,6 +502,8 @@ function toggleMax() {
 
 export function toggleTerminal(force) {
   if (!currentTaskId) return
+  // 需求便签/看板页面不显示终端，也不允许在此打开
+  if (termBlocked()) return
   const ts = taskState(currentTaskId)
   ts.open = force === undefined ? !ts.open : !!force
   if (panel) panel.classList.toggle('on', ts.open)
@@ -619,4 +627,6 @@ export function initTerminalView() {
     tasks.delete(taskId)
     if (currentTaskId === taskId) { currentTaskId = null; panel.classList.remove('on') }
   })
+  // 切到/离开需求便签时同步终端按钮高亮（便签页面不显示、不可打开终端）
+  on('pane-changed', () => syncToggle())
 }
