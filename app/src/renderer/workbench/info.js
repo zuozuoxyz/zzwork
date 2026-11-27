@@ -25,6 +25,18 @@ const detecting = new Set()
 const STATUS_OPTIONS = [['active', '进行中'], ['paused', '已暂停'], ['done', '已完成']]
 const TYPE_OPTIONS = [['work', 'work'], ['code', 'code']]
 
+// 每任务终端批处理：[{ id, name, cmd }]（cmd 可多行，逐行执行）
+async function loadTermBatches(taskId) {
+  try {
+    const raw = await store('settings.get', { key: 'task:terms:' + taskId, dflt: '' })
+    const list = raw ? JSON.parse(raw) : []
+    return Array.isArray(list) ? list : []
+  } catch { return [] }
+}
+function saveTermBatches(taskId, list) {
+  return store('settings.set', { key: 'task:terms:' + taskId, value: JSON.stringify(list) }).catch(() => {})
+}
+
 // 任务路径 -> 所在环境（与主进程 resolveTaskEnv 对齐）
 export function taskEnvDesc(task) {
   const p = String((task && task.path) || '')
@@ -88,14 +100,14 @@ export async function renderInfo() {
   let task = current
   try { task = (await store('tasks.get', { id: current.id })) || current } catch {}
 
-  const [todos, exSkills, exMcp, sessions, groups] = await Promise.all([
-    store('todos.list', { taskId: task.id }).catch(() => []),
+  const [exSkills, exMcp, sessions, groups] = await Promise.all([
     store('taskSkills.excluded', { taskId: task.id }).catch(() => []),
     store('taskMcp.excluded', { taskId: task.id }).catch(() => []),
     store('sessions.list', { taskId: task.id }).catch(() => []),
     store('groups.list').catch(() => state.groups)
   ])
   const shareInfo = await shareApi('task.get', { taskId: task.id }).catch(() => null)
+  const termBatches = await loadTermBatches(task.id)
   const groupList = groups || state.groups
   const groupById = new Map((groupList || []).map((g) => [g.id, g]))
   const groupLabel = (g) => { const parts = []; let c = g, n = 0; while (c && n++ < 50) { parts.unshift(c.name); c = c.parent_id ? groupById.get(c.parent_id) : null } return parts.join(' / ') }
@@ -150,14 +162,6 @@ export async function renderInfo() {
     return groups.join('')
   })()
 
-  const todoDone = todos.filter((t) => t.status === 'done').length
-  const todoHtml = todos.length
-    ? todos.map((t) => `<div class="todo ${t.status === 'done' ? 'done' : ''}" data-todo="${esc(t.id)}">
-        <span class="bx" data-act="toggle" title="切换完成"></span>
-        <span class="tt">${esc(t.title)}</span>
-        <span class="rm" data-act="del" title="删除">×</span></div>`).join('')
-    : `<div class="hint">还没有 TODO，输入后回车添加</div>`
-
   // 只列出任务所在环境的 Skills / MCP（本机 skills 入库在 global 名下）
   const skillEnvId = envDesc.kind === 'local' ? 'global' : envDesc.id
   const skills = state.skills.filter((s) => s.env_id === skillEnvId)
@@ -171,6 +175,14 @@ export async function renderInfo() {
       <span class="nm">${esc(m.name)}</span>
       <span class="ds">${esc(m.type || 'stdio')}</span></label>`).join('')
     : `<div class="hint">未发现 MCP 服务</div>`
+  const batchRows = termBatches.length ? termBatches.map((b, i) => `<div class="termbatch" data-bi="${i}">
+      <div class="tb-head">
+        <input class="ftxt tb-name" data-f="name" placeholder="名称（如：启动开发）" value="${esc(b.name || '')}">
+        <button class="btn sm tb-del" data-bi="${i}" title="删除批处理">${ic('trash-2', 11)}</button>
+      </div>
+      <textarea class="tb-cmd" data-f="cmd" spellcheck="false" placeholder="要执行的命令，每行一条，例如：npm run dev">${esc(b.cmd || '')}</textarea>
+    </div>`).join('')
+    : `<div class="hint">还没有批处理。点「新增」填写名称与命令，之后悬停终端「+」即可一键新开终端执行。</div>`
 
   body.innerHTML = `
     <div class="hd"><h2>${esc(task.name)}</h2>
@@ -216,13 +228,14 @@ export async function renderInfo() {
     <textarea class="membox" id="keyinfoBox" spellcheck="false" placeholder="每行一条，如：API Key：xxx / 测试账号：admin / 联系负责人：张三">${esc(keyinfo)}</textarea>
     <div class="sec">会话 <span style="text-transform:none;letter-spacing:0;color:var(--faint)">${topSessions.length}</span></div>
     <div id="sessionsList">${sessionRows}</div>
-    <div class="sec">TODO <span style="text-transform:none;letter-spacing:0;color:var(--faint)">${todoDone} / ${todos.length}</span></div>
-    <div id="todoList">${todoHtml}</div>
-    <div class="frow" style="margin:6px 0 0"><input class="ftxt" id="todoInput" placeholder="添加 TODO，回车确认"></div>
     <div class="sec">Skills</div>
     <div class="chklist chips" id="skillToggles">${skillRows}</div>
     <div class="sec">MCP</div>
-    <div class="chklist" id="mcpToggles">${mcpRows}</div>`
+    <div class="chklist" id="mcpToggles">${mcpRows}</div>
+    <div class="sec">终端批处理
+      <span style="text-transform:none;letter-spacing:0;color:var(--faint)">悬停终端「+」选择即新开终端执行</span>
+      <button class="btn sm" id="addTermBatch" style="margin-left:auto">${ic('plus', 11)} 新增</button></div>
+    <div id="termBatches">${batchRows}</div>`
   body.dataset.renderId = String(seq)
   refreshIcons()
 
@@ -285,31 +298,6 @@ export async function renderInfo() {
     emit('task-updated', task.id)
   })
 
-  const todoList = $('#todoList')
-  todoList.addEventListener('click', async (e) => {
-    const row = e.target.closest('.todo')
-    if (!row) return
-    const id = row.getAttribute('data-todo')
-    const act = e.target.getAttribute('data-act')
-    if (act === 'toggle') {
-      const t = todos.find((x) => x.id === id)
-      await store('todos.setStatus', { id, status: t && t.status === 'done' ? 'todo' : 'done' })
-      await renderInfo()
-    } else if (act === 'del') {
-      await store('todos.delete', { id })
-      await renderInfo()
-    }
-  })
-  $('#todoInput').addEventListener('keydown', async (e) => {
-    if (e.key !== 'Enter') return
-    const v = e.target.value.trim()
-    if (!v) return
-    await store('todos.add', { taskId: task.id, title: v })
-    await renderInfo()
-    const again = $('#todoInput')
-    if (again) again.focus()
-  })
-
   $('#skillToggles').addEventListener('change', async (e) => {
     const id = e.target.getAttribute('data-skill')
     if (!id) return
@@ -321,6 +309,39 @@ export async function renderInfo() {
     if (!id) return
     await store('taskMcp.setExcluded', { taskId: task.id, mcpId: id, excluded: !e.target.checked })
     await renderInfo()
+  })
+
+  const saveBatchesLazy = debounce(() => saveTermBatches(task.id, termBatches), 500)
+  const termBatchesEl = $('#termBatches')
+  if (termBatchesEl) {
+    termBatchesEl.addEventListener('input', (e) => {
+      const row = e.target.closest('.termbatch')
+      if (!row) return
+      const i = Number(row.getAttribute('data-bi'))
+      const f = e.target.getAttribute('data-f')
+      if (!f || !termBatches[i]) return
+      termBatches[i][f] = e.target.value
+      saveBatchesLazy()
+    })
+    termBatchesEl.addEventListener('click', async (e) => {
+      const del = e.target.closest('.tb-del')
+      if (!del) return
+      const i = Number(del.getAttribute('data-bi'))
+      if (!termBatches[i]) return
+      termBatches.splice(i, 1)
+      await saveTermBatches(task.id, termBatches)
+      renderInfo()
+    })
+  }
+  const addBatchBtn = $('#addTermBatch')
+  if (addBatchBtn) addBatchBtn.addEventListener('click', async () => {
+    termBatches.push({ id: 'tb-' + Math.random().toString(36).slice(2, 9), name: '', cmd: '' })
+    await saveTermBatches(task.id, termBatches)
+    await renderInfo()
+    const rows = document.querySelectorAll('#termBatches .termbatch')
+    const last = rows[rows.length - 1]
+    const inp = last && last.querySelector('.tb-name')
+    if (inp) inp.focus()
   })
 
   const shareEl = (id) => document.getElementById(id)
@@ -344,12 +365,11 @@ export async function renderInfo() {
   if (shareEl('addRemoteBtn')) shareEl('addRemoteBtn').addEventListener('click', () => addRemoteAgent())
   if (shareEl('browseRemoteBtn')) shareEl('browseRemoteBtn').addEventListener('click', () => browseRemote(shareEl('browseRemoteBtn').getAttribute('data-link')))
 
-  updateStatus(task, todoDone, todos.length, envLabel)
+  updateStatus(task, envLabel)
 }
 
-function updateStatus(task, done, total, envLabel) {
-  const stTask = $('#stTask')
-  if (stTask) stTask.textContent = `✓ ${task.name} ${done}/${total}`
+function updateStatus(task, envLabel) {
+  // 顶部标题由 main.js 的 syncTopTitle 统一维护（随视图同步），此处只更新右下环境
   const stRight = $('#stRight')
   if (stRight) stRight.textContent = '环境：' + envLabel
 }

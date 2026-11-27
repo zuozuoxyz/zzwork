@@ -1,6 +1,6 @@
 // 任务目录文件树（VS Code 风格：展开箭头、缩进参考线、类型图标、空白右键菜单）
 import { fsapi, dialog } from '../lib/api.js'
-import { state, activeTask } from '../lib/state.js'
+import { state, activeTask, on } from '../lib/state.js'
 import { esc, ic, refreshIcons, joinPath, dirname, basename } from '../lib/ui.js'
 import { openFile, closeFile } from './editor.js'
 import { promptText } from '../components/modal.js'
@@ -65,6 +65,7 @@ export async function renderFileTree(container, opts = {}) {
   container.__ftOpts = opts
   const task = opts.task || activeTask()
   const root = opts.root || (task && task.path)
+  container.__ftRoot = root || ''
   if (!root) {
     lastTaskPath = ''
     container.innerHTML = `<div class="empty" style="padding:10px 8px;font-size:11px">选择任务后显示文件</div>`
@@ -142,6 +143,58 @@ function markActive(container) {
     row.classList.toggle('sel', row.dataset.path === state.activeFile)
   }
 }
+
+// active 相对 root 需要展开的中间目录（不含 root 自身）
+function ancestorDirs(root, file) {
+  const out = []
+  const nr = normSlash(root)
+  let d = dirname(file)
+  let guard = 0
+  while (d && isUnderPath(root, d) && normSlash(d) !== nr && guard++ < 100) {
+    out.unshift(d)
+    const parent = dirname(d)
+    if (parent === d) break
+    d = parent
+  }
+  return out
+}
+
+function scrollActiveIntoView(container) {
+  const body = container.querySelector('#ftreeBody')
+  if (!body) return
+  const row = [...body.querySelectorAll('.fr')].find((r) => r.dataset.path === state.activeFile)
+  if (row) { try { row.scrollIntoView({ block: 'nearest' }) } catch {} }
+}
+
+// 选中文件变化时：展开其所在的折叠目录并高亮、滚入可视区
+export function revealActiveFile() {
+  const active = state.activeFile
+  for (const c of document.querySelectorAll('#filesTree, #boardSideFiles')) {
+    if (!active || !c.__ftRoot || !isUnderPath(c.__ftRoot, active) || !c.offsetParent) {
+      markActive(c)
+      continue
+    }
+    let changed = false
+    for (const d of ancestorDirs(c.__ftRoot, active)) {
+      if (!expanded.has(d)) { expanded.add(d); changed = true }
+    }
+    if (changed) renderFileTree(c, c.__ftOpts).then(() => { markActive(c); scrollActiveIntoView(c) })
+    else { markActive(c); scrollActiveIntoView(c) }
+  }
+}
+
+// 仅同步高亮，不变更展开状态
+export function markActiveFile() {
+  for (const c of document.querySelectorAll('#filesTree, #boardSideFiles')) markActive(c)
+}
+
+// 切到另一个文件时才自动展开，避免用户手动折叠后被后续事件反复撑开
+let lastRevealed = ''
+on('tabs-changed', () => {
+  if (state.activeFile !== lastRevealed) { lastRevealed = state.activeFile; revealActiveFile() }
+  else markActiveFile()
+})
+on('pane-changed', markActiveFile)
 
 async function buildTree(body, host, dirPath, depth, after) {
   let list = []

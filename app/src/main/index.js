@@ -46,9 +46,14 @@ if (!app.requestSingleInstanceLock()) {
       backgroundColor: '#17181c',
       icon: APP_ICON,
       autoHideMenuBar: true,
-      // 参考 VS Code：隐藏系统标题栏，窗口按钮用原生 overlay 画在自绘标题栏右侧
-      titleBarStyle: 'hidden',
-      titleBarOverlay: { color: '#191a1b', symbolColor: '#c8cdd2', height: 30 },
+      // 参考 VS Code：Windows/macOS 隐藏系统标题栏，窗口按钮用原生 overlay 画在自绘标题栏右侧。
+      // Linux 不支持 titleBarOverlay，若仍隐藏标题栏会失去关闭/最小化按钮，故保留系统原生标题栏。
+      ...(process.platform === 'linux'
+        ? {}
+        : {
+            titleBarStyle: 'hidden',
+            titleBarOverlay: { color: '#191a1b', symbolColor: '#c8cdd2', height: 30 }
+          }),
       webPreferences: {
         preload: path.join(__dirname, '../preload/index.js'),
         contextIsolation: true,

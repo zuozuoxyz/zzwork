@@ -68,7 +68,7 @@ async function listDir(dir) {
     catch { return [] }
   }
   try {
-    return fs.readdirSync(dir, { withFileTypes: true }).map((d) => ({ name: d.name, path: path.join(dir, d.name), dir: d.isDirectory() }))
+    return (await fs.promises.readdir(dir, { withFileTypes: true })).map((d) => ({ name: d.name, path: path.join(dir, d.name), dir: d.isDirectory() }))
   } catch { return [] }
 }
 

@@ -18,9 +18,10 @@ async function readTextFile(file, limit = 4000) {
     return raw.length > limit ? raw.slice(0, limit) : raw
   }
   try {
-    const st = fs.statSync(file)
+    // 异步 fs：\\wsl$ 等 9p/UNC 路径同步读会阻塞主线程数秒（界面无响应），转 libuv 线程池
+    const st = await fs.promises.stat(file)
     if (!st.isFile()) return ''
-    const raw = fs.readFileSync(file, 'utf8')
+    const raw = await fs.promises.readFile(file, 'utf8')
     return raw.length > limit ? raw.slice(0, limit) : raw
   } catch { return '' }
 }
@@ -28,8 +29,8 @@ async function readTextFile(file, limit = 4000) {
 async function writeTaskTextFile(file, content) {
   const r = parseRemotePath(file)
   if (r) return remotefs.writeFile(r.envId, r.remotePath, content)
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(file, content, 'utf8')
+  await fs.promises.mkdir(path.dirname(file), { recursive: true })
+  await fs.promises.writeFile(file, content, 'utf8')
 }
 
 // 列目录（本地 / 远程统一）：过滤 .zzwork/.git，目录优先。返回 [{ name, path, dir }]
@@ -39,7 +40,7 @@ async function listTaskDir(dir) {
     const list = await remotefs.readDir(r.envId, r.remotePath).catch(() => [])
     return list.filter((x) => x.name !== '.zzwork' && x.name !== '.git')
   }
-  const names = fs.readdirSync(dir, { withFileTypes: true })
+  const names = (await fs.promises.readdir(dir, { withFileTypes: true }))
     .filter((d) => d.name !== '.zzwork' && d.name !== '.git')
   names.sort((a, b) => (b.isDirectory() - a.isDirectory()) || a.name.localeCompare(b.name))
   return names.slice(0, 200).map((d) => ({ name: d.name, path: path.join(dir, d.name), dir: d.isDirectory() }))

@@ -1,4 +1,4 @@
-// zzwork 数据层：SQLite（组/任务/todo/消息/设置），旧 projects/progress 自动迁移
+// zzwork 数据层：SQLite（组/任务/消息/设置），旧 projects 自动迁移
 const path = require('path')
 const fs = require('fs')
 const os = require('os')
@@ -13,8 +13,6 @@ CREATE TABLE IF NOT EXISTS groups (id TEXT PRIMARY KEY, name TEXT NOT NULL, pare
 CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, name TEXT NOT NULL, group_id TEXT, type TEXT DEFAULT 'work',
   status TEXT DEFAULT 'active', scope TEXT DEFAULT 'long', path TEXT NOT NULL, agent_id TEXT DEFAULT 'builtin', meta TEXT DEFAULT '{}',
   brief TEXT DEFAULT '', brief_at TEXT DEFAULT '', deleted_at TEXT DEFAULT '', created_at TEXT, updated_at TEXT);
-CREATE TABLE IF NOT EXISTS todos (id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
-  title TEXT NOT NULL, status TEXT DEFAULT 'todo', sort INTEGER DEFAULT 0, created_at TEXT, updated_at TEXT);
 CREATE TABLE IF NOT EXISTS messages (id TEXT PRIMARY KEY, task_id TEXT NOT NULL, role TEXT NOT NULL,
   content TEXT NOT NULL, session_id TEXT DEFAULT '', kind TEXT DEFAULT 'text', run_id TEXT DEFAULT '',
   meta TEXT DEFAULT '{}', created_at TEXT);
@@ -60,9 +58,15 @@ function providerName(type, baseUrl) {
   try { return new URL(baseUrl).host || 'OpenAI 兼容' } catch { return 'OpenAI 兼容' }
 }
 
+function appDataDir() {
+  if (process.env.APPDATA) return process.env.APPDATA
+  if (process.platform === 'darwin') return path.join(os.homedir(), 'Library', 'Application Support')
+  return process.env.XDG_CONFIG_HOME || path.join(os.homedir(), '.config')
+}
+
 function openDb(log) {
   const primary = process.env.ZZWORK_DB_PATH
-    || path.join(process.env.APPDATA || '', 'zzwork', 'data', 'zzwork.db')
+    || path.join(appDataDir(), 'zzwork', 'data', 'zzwork.db')
   const candidates = [primary, path.join(os.homedir(), '.zzwork-vscode', 'zzwork.db')]
   for (const p of candidates) {
     try {
@@ -81,14 +85,14 @@ function openDb(log) {
   const jp = primary.replace(/\.db$/, '.json')
   fs.mkdirSync(path.dirname(jp), { recursive: true })
   const data = fs.existsSync(jp) ? JSON.parse(fs.readFileSync(jp, 'utf8'))
-    : { groups: [], tasks: [], todos: [], messages: [], models: [], providers: [], settings: {} }
+    : { groups: [], tasks: [], messages: [], models: [], providers: [], settings: {} }
   if (!data.providers) data.providers = []
   if (!data.sessions) data.sessions = []
   if (!data.runs) data.runs = []
   return { kind: 'json', data, path: jp }
 }
 
-// 旧 projects/progress → tasks/todos（只跑一次，旧表保留不动）
+// 旧 projects → tasks（只跑一次，旧表保留不动）
 function migrate(db, log) {
   // tasks 增加 model_id（幂等）
   try {
@@ -165,11 +169,6 @@ function migrate(db, log) {
     db.prepare(`INSERT OR IGNORE INTO tasks (id,name,group_id,type,status,path,agent_id,meta,created_at,updated_at)
       SELECT id,name,group_id,'code',COALESCE(NULLIF(status,'archived'),'active'),COALESCE(path,''),'builtin','{}',COALESCE(created_at,?),COALESCE(updated_at,?) FROM projects`).run(t, t)
     log && log('[zzwork] 已迁移 projects → tasks')
-  }
-  if (has('progress') && cnt('todos') === 0) {
-    db.prepare(`INSERT OR IGNORE INTO todos (id,task_id,title,status,sort,created_at,updated_at)
-      SELECT id,project_id,title,CASE WHEN status='done' THEN 'done' ELSE 'todo' END,0,COALESCE(created_at,?),COALESCE(updated_at,?) FROM progress`).run(now(), now())
-    log && log('[zzwork] 已迁移 progress → todos')
   }
   if (!db.prepare("SELECT value FROM settings WHERE key='agents'").get()) {
     db.prepare('INSERT INTO settings (key,value) VALUES (?,?)').run('agents', JSON.stringify(DEFAULT_AGENTS))
@@ -333,7 +332,6 @@ function makeStore(log) {
     },
     deleteTask(id) {
       if (h.kind === 'sqlite') {
-        h.db.prepare('DELETE FROM todos WHERE task_id=?').run(id)
         h.db.prepare('DELETE FROM messages WHERE task_id=?').run(id)
         h.db.prepare('DELETE FROM runs WHERE task_id=?').run(id)
         h.db.prepare('DELETE FROM sessions WHERE task_id=?').run(id)
@@ -342,7 +340,6 @@ function makeStore(log) {
         h.db.prepare('DELETE FROM tasks WHERE id=?').run(id)
       } else {
         h.data.tasks = h.data.tasks.filter((x) => x.id !== id)
-        h.data.todos = h.data.todos.filter((x) => x.task_id !== id)
         h.data.messages = h.data.messages.filter((x) => x.task_id !== id)
         h.data.sessions = (h.data.sessions || []).filter((x) => x.task_id !== id)
         h.data.runs = (h.data.runs || []).filter((x) => x.task_id !== id)
@@ -350,29 +347,6 @@ function makeStore(log) {
         h.data.task_mcp = (h.data.task_mcp || []).filter((x) => x.task_id !== id)
         persist()
       }
-    },
-
-    // ---- todos ----
-    listTodos(taskId) {
-      if (h.kind === 'sqlite') return h.db.prepare('SELECT * FROM todos WHERE task_id=? ORDER BY sort,created_at').all(taskId)
-      return h.data.todos.filter((x) => x.task_id === taskId)
-    },
-    addTodo(taskId, title) {
-      const id = uuid(), t = now()
-      const sort = S.listTodos(taskId).length
-      if (h.kind === 'sqlite') {
-        h.db.prepare('INSERT INTO todos (id,task_id,title,status,sort,created_at,updated_at) VALUES (?,?,?,?,?,?,?)').run(id, taskId, title, 'todo', sort, t, t)
-      } else { h.data.todos.push({ id, task_id: taskId, title, status: 'todo', sort, created_at: t, updated_at: t }); persist() }
-      return id
-    },
-    setTodoStatus(todoId, status) {
-      const t = now()
-      if (h.kind === 'sqlite') h.db.prepare('UPDATE todos SET status=?,updated_at=? WHERE id=?').run(status, t, todoId)
-      else { const x = h.data.todos.find((y) => y.id === todoId); if (x) { x.status = status; x.updated_at = t; persist() } }
-    },
-    deleteTodo(todoId) {
-      if (h.kind === 'sqlite') h.db.prepare('DELETE FROM todos WHERE id=?').run(todoId)
-      else { h.data.todos = h.data.todos.filter((x) => x.id !== todoId); persist() }
     },
 
     // ---- messages ----

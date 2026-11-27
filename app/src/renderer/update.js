@@ -32,6 +32,7 @@ export function initUpdate() {
     busy = false
     render()
     const reason = (r && r.reason) || 'error'
+    if (reason === 'linux') { toast((r && r.message) || '已打开下载页，请手动下载新版', 'info', 6000); return }
     const msg = reason === 'dev' ? '开发模式不支持自动安装'
       : reason === 'latest' ? '当前已是最新版本'
         : reason === 'busy' ? '正在升级中…'

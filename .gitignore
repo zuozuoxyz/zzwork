@@ -25,3 +25,7 @@ Thumbs.db
 !/app/build/icon.png
 !/app/build/icon.ico
 !/app/build/icon.svg
+
+# README 用的界面截图需要入库
+!/docs/images/
+!/docs/images/*.png

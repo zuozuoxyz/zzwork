@@ -405,8 +405,8 @@ async function prepareInjection(task, env, selection, systemExtra) {
       out.args.push('--mcp-config', argPath, '--strict-mcp-config')
     } else {
       const dir = path.join(task.path, '.zzwork')
-      fs.mkdirSync(dir, { recursive: true })
-      fs.writeFileSync(path.join(dir, 'mcp.json'), content)
+      await fs.promises.mkdir(dir, { recursive: true })
+      await fs.promises.writeFile(path.join(dir, 'mcp.json'), content)
       let argPath = path.join(dir, 'mcp.json')
       if (env.kind === 'wsl') {
         const m = task.path.match(/^\\\\wsl(?:\.localhost|\$)?\\[^\\]+\\(.*)$/i)
@@ -449,16 +449,16 @@ async function writeClaudeSettings(task, env, envVars) {
       if (!d) return null
       const winDir = '\\\\wsl$\\' + d[1] + '\\tmp'
       const winPath = path.join(winDir, name)
-      fs.writeFileSync(winPath, content)
-      return { argPath: '/tmp/' + name, cleanup: () => { try { fs.unlinkSync(winPath) } catch {} } }
+      await fs.promises.writeFile(winPath, content)
+      return { argPath: '/tmp/' + name, cleanup: () => { fs.promises.unlink(winPath).catch(() => {}) } }
     }
     // Windows 本机：写到系统临时目录（非任务目录），正斜杠路径传给 claude
     const dir = path.join(os.tmpdir(), 'zzwork-claude-settings')
-    fs.mkdirSync(dir, { recursive: true })
+    await fs.promises.mkdir(dir, { recursive: true })
     const winPath = path.join(dir, name)
-    fs.writeFileSync(winPath, content, { mode: 0o600 })
+    await fs.promises.writeFile(winPath, content, { mode: 0o600 })
     const argPath = winPath.replace(/\\/g, '/')
-    return { argPath, cleanup: () => { try { fs.unlinkSync(winPath) } catch {} } }
+    return { argPath, cleanup: () => { fs.promises.unlink(winPath).catch(() => {}) } }
   } catch {
     return null
   }
@@ -473,7 +473,8 @@ function cleanupLegacyClaudeSettings(task, env) {
       return
     }
     const p = path.join(task.path, '.zzwork', 'claude-settings.json')
-    if (fs.existsSync(p)) fs.unlinkSync(p)
+    // 异步删除（fire-and-forget）：\\wsl$ 上 existsSync 也是同步往返，会阻塞主线程
+    fs.promises.unlink(p).catch(() => {})
   } catch {}
 }
 

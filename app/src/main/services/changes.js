@@ -9,6 +9,13 @@ const { resolveEnv } = require('../../core/agentRunner')
 
 const DEFAULT_BUDGET = 10000
 const MAX_FILES = 800
+// 超大 diff 文本的解析上限：git 输出可能达数十 MB，splitPatchBlocks/正则处理是同步 CPU，
+// 不设上限会长时间占住主线程。超出部分直接截断（只影响超大树改动时的差异展示粒度）。
+const MAX_PATCH_PARSE = 4 * 1024 * 1024
+
+// 让出事件循环：大批量同步 CPU 处理（读文件/正则/逐文件 diff）会让主进程消息循环得不到执行，
+// 每隔若干项调一次，保证窗口/IPC/定时器能穿插运行，避免“未响应”。
+function yieldLoop() { return new Promise((resolve) => setImmediate(resolve)) }
 const SKIP_DIRS = new Set(['.git', 'node_modules', 'out', 'release', 'dist', 'build', '.zzwork', '.next',
   'target', '.venv', 'venv', '__pycache__', '.idea', '.vs', '.cache', 'coverage'])
 const SKIP_FILES = /(^|[\\/])(\.env(\..*)?|.*\.(png|jpe?g|gif|webp|ico|pdf|zip|gz|7z|exe|dll|so|dylib|class|jar|woff2?|ttf|mp4|mp3|lock))$/i
@@ -52,10 +59,6 @@ function gitFor(env, taskPath) {
   return (list) => runFile('git', ['-C', taskPath, ...list])
 }
 
-async function hashFile(file) {
-  try { return crypto.createHash('sha1').update(await fs.promises.readFile(file)).digest('hex').slice(0, 12) } catch { return '' }
-}
-
 function sigOf(text) {
   return crypto.createHash('sha1').update(String(text || '')).digest('hex').slice(0, 16)
 }
@@ -80,8 +83,10 @@ async function snapshotTree(root) {
         if (SKIP_FILES.test(rp)) continue
         let st
         try { st = await fs.promises.stat(full) } catch { continue }
-        out[rp] = [st.size, Math.round(st.mtimeMs), st.size <= 262144 ? await hashFile(full) : '']
+        // 只记体积+毫秒级修改时间（不做内容哈希，避免为算指纹而把数百文件全读一遍造成卡顿）
+        out[rp] = [st.size, Math.round(st.mtimeMs)]
         n++
+        if (n % 32 === 0) await yieldLoop()
       }
     }
   }
@@ -94,7 +99,7 @@ function diffSnapshots(prev, next) {
   for (const [p, v] of Object.entries(next)) {
     const old = prev[p]
     if (!old) added.push(p)
-    else if (old[0] !== v[0] || old[2] !== v[2]) modified.push(p)
+    else if (old[0] !== v[0] || old[1] !== v[1]) modified.push(p)
   }
   for (const p of Object.keys(prev)) if (!next[p]) deleted.push(p)
   return { added, modified, deleted }
@@ -147,7 +152,9 @@ async function collectGit(task, env, ck, budget) {
 
   const statusRaw = (await git(['status', '--porcelain=v1']) || '')
   const statusMap = parseGitStatus(statusRaw)
-  const patchRaw = (await git(['diff', '--no-color', '-U3']) || '') + (await git(['diff', '--cached', '--no-color', '-U3']) || '')
+  let patchRaw = (await git(['diff', '--no-color', '-U3']) || '') + (await git(['diff', '--cached', '--no-color', '-U3']) || '')
+  if (patchRaw.length > MAX_PATCH_PARSE) patchRaw = patchRaw.slice(0, MAX_PATCH_PARSE)
+  await yieldLoop()
   const blocks = splitPatchBlocks(patchRaw)
 
   // 只保留"自上次基线以来真正变化"的文件，剔除 AI 自己改过、且其后未再变的文件
@@ -274,7 +281,10 @@ async function gitCheckpoint(task, env) {
   const head = (await git(['rev-parse', 'HEAD']) || '').trim()
   const branch = (await git(['rev-parse', '--abbrev-ref', 'HEAD']) || '').trim()
   const statusRaw = (await git(['status', '--porcelain=v1']) || '')
-  const patchRaw = (await git(['diff', '--no-color', '-U3']) || '') + (await git(['diff', '--cached', '--no-color', '-U3']) || '')
+  let patchRaw = (await git(['diff', '--no-color', '-U3']) || '') + (await git(['diff', '--cached', '--no-color', '-U3']) || '')
+  // 与 collectGit 一致：解析前截断超大 diff，避免同步解析占住主线程（回合收尾时执行）
+  if (patchRaw.length > MAX_PATCH_PARSE) patchRaw = patchRaw.slice(0, MAX_PATCH_PARSE)
+  await yieldLoop()
   const blocks = splitPatchBlocks(patchRaw)
   const snap = {}
   for (const [p, code] of parseGitStatus(statusRaw).entries()) snap[p] = fileSig(blocks, p, code)
@@ -322,37 +332,6 @@ function readableLocally(taskPath, env) {
   return false
 }
 
-async function readTextSnapshot(root) {
-  const out = new Map()
-  let n = 0
-  const walk = async (dir, rel, depth) => {
-    if (n >= TURN_MAX_FILES || depth > 6) return
-    let entries
-    try { entries = await fs.promises.readdir(dir, { withFileTypes: true }) } catch { return }
-    for (const e of entries) {
-      if (n >= TURN_MAX_FILES) break
-      const name = e.name
-      const full = path.join(dir, name)
-      const rp = rel ? rel + '/' + name : name
-      if (e.isDirectory()) {
-        if (SKIP_DIRS.has(name) || name.startsWith('.')) continue
-        await walk(full, rp, depth + 1)
-      } else if (e.isFile()) {
-        if (SKIP_FILES.test(rp)) continue
-        let st
-        try { st = await fs.promises.stat(full) } catch { continue }
-        if (st.size > TURN_TEXT_LIMIT) { out.set(rp, { bin: true, text: '' }); n++; continue }
-        let buf
-        try { buf = await fs.promises.readFile(full) } catch { continue }
-        if (buf.includes(0)) out.set(rp, { bin: true, text: '' })
-        else out.set(rp, { text: buf.toString('utf8') })
-        n++
-      }
-    }
-  }
-  await walk(root, '', 0)
-  return out
-}
 
 function parseGitStatus(text) {
   const map = new Map()
@@ -423,19 +402,99 @@ function capStoredPatch(text) {
   return s.length > STORE_PATCH_LIMIT ? s.slice(0, STORE_PATCH_LIMIT) + '\n…（已截断）' : s
 }
 
+// 读取整树文本内容快照（非 git 目录算 diff 用）：rel -> { text, bin }。
+// 异步遍历+读取，且只在回合开始时并行执行（不与回复抢主线程），回合结束再取。
+async function readTextSnapshot(root) {
+  const out = new Map()
+  let n = 0
+  const walk = async (dir, rel, depth) => {
+    if (n >= TURN_MAX_FILES || depth > 6) return
+    let entries
+    try { entries = await fs.promises.readdir(dir, { withFileTypes: true }) } catch { return }
+    for (const e of entries) {
+      if (n >= TURN_MAX_FILES) break
+      const name = e.name
+      const full = path.join(dir, name)
+      const rp = rel ? rel + '/' + name : name
+      if (e.isDirectory()) {
+        if (SKIP_DIRS.has(name) || name.startsWith('.')) continue
+        await walk(full, rp, depth + 1)
+      } else if (e.isFile()) {
+        if (SKIP_FILES.test(rp)) continue
+        let st
+        try { st = await fs.promises.stat(full) } catch { continue }
+        if (st.size > TURN_TEXT_LIMIT) { out.set(rp, { bin: true, text: '' }); n++; continue }
+        let buf
+        try { buf = await fs.promises.readFile(full) } catch { continue }
+        if (buf.includes(0)) out.set(rp, { bin: true, text: '' })
+        else out.set(rp, { text: buf.toString('utf8') })
+        n++
+        if (n % 32 === 0) await yieldLoop()
+      }
+    }
+  }
+  await walk(root, '', 0)
+  return out
+}
+
+// 读取单个文件为文本快照：{text} / {bin} / null（不存在或读失败）
+async function readFileSnapshot(full) {
+  let st
+  try { st = await fs.promises.stat(full) } catch { return null }
+  if (!st.isFile()) return null
+  if (st.size > TURN_TEXT_LIMIT) return { bin: true, text: '' }
+  let buf
+  try { buf = await fs.promises.readFile(full) } catch { return null }
+  if (buf.includes(0)) return { bin: true, text: '' }
+  return { text: buf.toString('utf8') }
+}
+
+// 问答前：记录当前所有脏文件（含未跟踪）的内容；已删除的记 missing，便于回合结束判定
+async function captureDirtyContents(root, statusRaw) {
+  const files = new Map()
+  let i = 0
+  for (const p of parseGitStatus(statusRaw).keys()) {
+    if (files.size >= 400) break
+    if (SKIP_FILES.test(p)) continue
+    if (++i % 32 === 0) await yieldLoop()
+    const snap = await readFileSnapshot(path.join(root, p))
+    files.set(p, snap || { missing: true })
+  }
+  return files
+}
+
 async function captureTurn(task, env) {
   if (!task || !task.path) return null
   const e = env || resolveEnv(task.path, {})
+  let inside = 'false', head = '', status = '', isRoot = false
+  try {
+    const git = gitFor(e, task.path)
+    inside = (await git(['rev-parse', '--is-inside-work-tree']) || '').trim()
+    if (inside === 'true') {
+      head = (await git(['rev-parse', 'HEAD']) || '').trim()
+      status = await git(['status', '--porcelain=v1']) || ''
+      // --show-prefix 返回「当前目录相对仓库根」，为空即任务目录正是仓库根。
+      // 比 path.resolve(--show-toplevel) 对比更稳妥（Windows 下 toplevel 可能是 /c/... 形式）。
+      isRoot = !(await git(['rev-parse', '--show-prefix']) || '').trim()
+    }
+  } catch {}
+  // 仅当任务目录就是仓库根、且可本地直读时，才用 git 内容差：记录问答前脏文件内容，
+  // 回合结束按内容差算本轮改动（干净文件以 HEAD blob 为基线）。
+  // 任务目录只是仓库的子目录时不能用 git 路径——status 路径相对仓库根会错位，且被 .gitignore 的
+  // 工作文件根本不会出现在 status 里（例如测试目录），应退回整树文本快照。
+  if (inside === 'true' && isRoot && readableLocally(task.path, e)) {
+    try {
+      const files = await captureDirtyContents(task.path, status)
+      return { kind: 'git', head, status, files }
+    } catch {}
+  }
+  // 可本地直读（非 git / 仓库子目录 / \\wsl$）：记录「整树文本内容」基线，回合结束逐行 diff。
   if (readableLocally(task.path, e)) {
     try { return { kind: 'local', files: await readTextSnapshot(task.path) } } catch { return null }
   }
-  try {
-    const git = gitFor(e, task.path)
-    const inside = (await git(['rev-parse', '--is-inside-work-tree']) || '').trim()
-    if (inside !== 'true') return null
-    const status = await git(['status', '--porcelain=v1']) || ''
-    return { kind: 'git', head: (await git(['rev-parse', 'HEAD']) || '').trim(), status }
-  } catch { return null }
+  // 远程不可直读：退回 git 状态对比（仅尽力而为，路径相对仓库根可能与任务目录不一致）
+  if (inside === 'true') return { kind: 'git', head, status }
+  return null
 }
 
 function statusOf(code) {
@@ -449,8 +508,10 @@ async function localTurnDiff(task, start) {
   const now = await readTextSnapshot(task.path)
   const files = []
   let budget = STORE_PATCH_BUDGET
+  let i = 0
   const paths = [...new Set([...start.files.keys(), ...now.keys()])].sort()
   for (const rel of paths) {
+    if (++i % 16 === 0) await yieldLoop()
     const a = start.files.get(rel)
     const b = now.get(rel)
     if (a && b && a.bin && b.bin) continue
@@ -484,13 +545,79 @@ async function localTurnDiff(task, start) {
   return { files, note: '' }
 }
 
+// 本次问答的改动：把「问答前」脏文件内容快照与「回答后」当前内容逐文件 diff；
+// 开始时干净的文件以 HEAD 版本为基线，从而只显示这一轮问答产生的改动（而非整个 git diff vs HEAD）。
+async function gitTurnDiffContent(task, env, start) {
+  const git = gitFor(env, task.path)
+  const statusNow = parseGitStatus(await git(['status', '--porcelain=v1']) || '')
+  const headNow = (await git(['rev-parse', 'HEAD']) || '').trim()
+  const startFiles = start.files
+  const cand = new Set([...startFiles.keys(), ...statusNow.keys()])
+  const paths = [...cand].sort()
+  const files = []
+  let budget = STORE_PATCH_BUDGET
+  let i = 0
+  for (const p of paths) {
+    if (SKIP_FILES.test(p)) continue
+    if (++i % 16 === 0) await yieldLoop()
+    let a
+    if (startFiles.has(p)) {
+      const s = startFiles.get(p)
+      a = (s && s.missing) ? null : s
+    } else {
+      // 开始时不在脏列表：要么干净（内容=HEAD），要么不存在（本题新增未跟踪）
+      const code = statusNow.get(p) || ''
+      if (code.includes('?') || code.startsWith('A') || code[1] === 'A') a = null
+      else {
+        const blob = await git(['show', 'HEAD:' + p])
+        if (blob == null) a = null
+        else if (blob.length > TURN_TEXT_LIMIT || blob.includes('\u0000')) a = { bin: true, text: '' }
+        else a = { text: blob }
+      }
+    }
+    const b = await readFileSnapshot(path.join(task.path, p))
+    if (!a && !b) continue
+    if (a && b && a.bin && b.bin) continue
+    const same = a && b && !a.bin && !b.bin &&
+      a.text.replace(/\r\n/g, '\n') === b.text.replace(/\r\n/g, '\n')
+    if (same) continue
+    const status = !a ? 'added' : !b ? 'deleted' : 'modified'
+    const file = { path: p, status, adds: 0, dels: 0, patch: '' }
+    if (a && b && (a.bin || b.bin)) {
+      file.binary = true
+    } else if (!a) {
+      const lines = String(b.text || '').replace(/\n$/, '').split(/\r?\n/).length
+      file.adds = lines
+      file.patch = budget > 0 ? coarsePatch(b.text, '+') : ''
+    } else if (!b) {
+      const lines = String(a.text || '').replace(/\n$/, '').split(/\r?\n/).length
+      file.dels = lines
+      file.patch = budget > 0 ? coarsePatch(a.text, '-') : ''
+    } else {
+      const hunk = await unifiedDiff(a.text, b.text)
+      const counts = addDelOf(hunk)
+      file.adds = counts.adds
+      file.dels = counts.dels
+      file.patch = budget > 0 ? hunksOnly(hunk) : ''
+    }
+    if (file.patch) file.patch = capStoredPatch(file.patch)
+    if (file.patch) budget -= file.patch.length
+    files.push(file)
+  }
+  const note = headNow && start.head && headNow !== start.head ? '存在新提交，仅列出工作区差异' : ''
+  return { files, note }
+}
+
 async function gitTurnDiff(task, env, start) {
+  if (start && start.files instanceof Map) return await gitTurnDiffContent(task, env, start)
   const git = gitFor(env, task.path)
   const statusNow = await git(['status', '--porcelain=v1']) || ''
   const headNow = (await git(['rev-parse', 'HEAD']) || '').trim()
-  const patchNow = (await git(['diff', '--no-color', '-U3']) || '') + (await git(['diff', '--cached', '--no-color', '-U3']) || '')
+  const patchNow0 = (await git(['diff', '--no-color', '-U3']) || '') + (await git(['diff', '--cached', '--no-color', '-U3']) || '')
+  const patchNow = patchNow0.length > MAX_PATCH_PARSE ? patchNow0.slice(0, MAX_PATCH_PARSE) : patchNow0
   const prev = parseGitStatus(start.status)
   const now = parseGitStatus(statusNow)
+  await yieldLoop()
   const blocks = splitPatchBlocks(patchNow)
   const files = []
   let budget = STORE_PATCH_BUDGET

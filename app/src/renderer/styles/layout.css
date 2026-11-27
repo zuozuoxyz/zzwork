@@ -3,6 +3,11 @@
 #zzv #pane-file { padding: 0 }
 #zzv .monaco-editor .margin { background: transparent }
 
+/* 侧栏与编辑区之间的可拖动分隔条（拖动调整左栏宽度占比） */
+#zzv .sidesplit { flex: 0 0 5px; cursor: col-resize; background: transparent; position: relative; z-index: 4 }
+#zzv .sidesplit:hover, #zzv .sidesplit.dragging { background: rgba(14,165,233,.35) }
+body.resizing-side, body.resizing-side * { cursor: col-resize !important; user-select: none !important }
+
 /* 标题栏过滤框 */
 #zzv .cmd input {
   flex: 1; min-width: 0; height: 100%; border: 0; background: none; color: var(--fg);
@@ -194,6 +199,17 @@
 #zzv .sessrow .sd { color: var(--faint); font-size: 10.5px }
 #zzv .membox { width: 100%; max-width: 720px; min-height: 76px; margin-bottom: 6px }
 
+/* 任务信息：终端批处理配置 */
+#zzv .termbatch { max-width: 720px; border: 1px solid var(--bd); border-radius: 7px; padding: 8px 10px;
+  margin-bottom: 8px; background: var(--card) }
+#zzv .termbatch .tb-head { display: flex; align-items: center; gap: 8px }
+#zzv .termbatch .tb-name { flex: 1; min-width: 0 }
+#zzv .termbatch .tb-del { flex: 0 0 auto }
+#zzv .termbatch .tb-cmd { width: 100%; margin-top: 6px; min-height: 54px; resize: vertical; padding: 7px 9px;
+  background: var(--card2); border: 1px solid var(--bd2); border-radius: 6px; color: var(--fg);
+  font-family: Consolas, "Cascadia Mono", Menlo, monospace; font-size: 12px; line-height: 1.5 }
+#zzv .termbatch .tb-cmd:focus { outline: none; border-color: var(--accent) }
+
 /* 便签归类：内联逐条确认（就地替换输入框） */
 #zzv .inboxreview { flex: 1; min-height: 0; margin-top: 10px; display: flex; flex-direction: column }
 #zzv .inboxreview[hidden] { display: none }
@@ -288,6 +304,19 @@
 #zzv #chatMention .mi.dir .mref { flex: 0 0 auto; font-size: 10px; color: var(--faint);
   border: 1px solid var(--bd2); border-radius: 4px; padding: 1px 6px }
 #zzv #chatMention .mi.dir .mref:hover { color: var(--fg); border-color: var(--accent) }
+#zzv #chatMention .mi.task .mtag { flex: 0 0 auto; font-size: 10px; color: #2dd4bf;
+  border: 1px solid rgba(45,212,191,.45); border-radius: 4px; padding: 1px 6px }
+/* @ 选择器根级：左「文件系统」| 右「智能体」两栏 */
+#zzv #chatMention .mcols { display: flex; align-items: stretch; gap: 4px; max-height: 268px }
+#zzv #chatMention .mcol { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; max-height: 268px }
+#zzv #chatMention .mcol + .mcol { border-left: 1px solid var(--bd); padding-left: 4px }
+#zzv #chatMention .mcolh { flex: 0 0 auto; display: flex; align-items: center; gap: 5px;
+  padding: 3px 7px 5px; font-size: 10px; text-transform: uppercase; letter-spacing: .4px; color: var(--faint) }
+#zzv #chatMention .mcollist { flex: 1 1 auto; min-height: 0; overflow: auto }
+#zzv #chatMention .mgroup { padding: 5px 8px 1px; font-size: 9.5px; text-transform: uppercase;
+  letter-spacing: .5px; color: var(--faint); font-weight: 600 }
+#zzv #chatMention .mgroup:first-child { padding-top: 1px }
+#zzv #chatMention .mempty { padding: 8px; color: var(--faint); font-size: 11px }
 
 /* 需求便签：左(上便签/下代码任务) | 分隔条 | 右全部任务总览 */
 #zzv .inboxsplit { display: flex; flex: 1; min-height: 0; min-width: 0 }

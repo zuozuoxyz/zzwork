@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { invoke, store } from '../lib/api.js'
 import { state, on } from '../lib/state.js'
-import { $, refreshIcons } from '../lib/ui.js'
+import { $, esc, refreshIcons } from '../lib/ui.js'
 import { toast } from '../components/toast.js'
 import { showContextMenu } from '../components/contextMenu.js'
 
@@ -77,7 +77,7 @@ function saveLayout(tid) {
   const ts = tasks.get(tid)
   if (!ts) return
   const data = {
-    tabs: ts.tabs.map((t) => ({ id: t.id, title: t.title, layout: t.layout, activePaneId: t.activePaneId })),
+    tabs: ts.tabs.map((t) => ({ id: t.id, title: t.title, lockTitle: !!t.lockTitle, layout: t.layout, activePaneId: t.activePaneId })),
     activeTabId: ts.activeTabId,
     open: !!ts.open
   }
@@ -128,7 +128,7 @@ async function loadStored(taskId) {
         if (!ts.panes.has(pid)) ts.panes.set(pid, mkPane(pid, taskId))
         return pid
       })
-      ts.tabs.push({ id: t.id || uuid(), title: t.title || '终端', layout: t.layout, activePaneId: t.activePaneId || panes[0] })
+      ts.tabs.push({ id: t.id || uuid(), title: t.title || '终端', lockTitle: !!t.lockTitle, layout: t.layout, activePaneId: t.activePaneId || panes[0] })
     }
     ts.activeTabId = (data.tabs || []).length ? (data.activeTabId || ts.tabs[0].id) : null
     ts.open = !!data.open
@@ -154,6 +154,44 @@ async function pasteInto(pane) {
 
 // ---------- xterm 挂载 ----------
 
+// 去掉 URL 末尾误并入的标点，避免把紧跟的句号/右括号当成链接一部分
+function trimUrl(u) {
+  let url = u
+  while (/[.,;:!?'"\]}>]$/.test(url)) url = url.slice(0, -1)
+  // 右括号只在左边没有成对左括号时才去掉（保留维基百科这类带括号的链接）
+  while (url.endsWith(')') && (url.match(/\(/g) || []).length < (url.match(/\)/g) || []).length) url = url.slice(0, -1)
+  return url
+}
+
+// 识别终端输出里的 http(s) 链接，Ctrl/⌘ + 点击在系统浏览器打开
+function attachLinkProvider(term) {
+  term.registerLinkProvider({
+    provideLinks(y, callback) {
+      const line = term.buffer.active.getLine(y - 1)
+      if (!line) { callback(undefined); return }
+      const text = line.translateToString(true)
+      const re = /https?:\/\/[^\s<>"'`]+/g
+      const links = []
+      let m
+      while ((m = re.exec(text))) {
+        const url = trimUrl(m[0])
+        if (!url) continue
+        const startX = m.index + 1
+        const endX = m.index + url.length
+        links.push({
+          range: { start: { x: startX, y }, end: { x: endX, y } },
+          text: url,
+          activate: (event, u) => {
+            if (!(event.ctrlKey || event.metaKey)) return
+            if (/^https?:/i.test(u)) window.open(u, '_blank')
+          }
+        })
+      }
+      callback(links.length ? links : undefined)
+    }
+  })
+}
+
 function ensureMounted(pane) {
   if (pane.el) return
   pane.el = document.createElement('div')
@@ -170,6 +208,7 @@ function ensureMounted(pane) {
   const fit = new FitAddon()
   term.loadAddon(fit)
   term.open(pane.el)
+  attachLinkProvider(term)
   pane.term = term
   pane.fit = fit
   term.onData((d) => {
@@ -235,6 +274,17 @@ function fitActive(ts) {
 
 // ---------- 进程 ----------
 
+// 在指定窗格里执行一段命令（多行按回车逐条发送），等待 shell 就绪后写入
+function runInPane(pane, cmd) {
+  const text = String(cmd || '').replace(/\r?\n/g, '\r')
+  if (!text.trim()) return
+  setTimeout(() => {
+    if (!pane || !pane.termId || pane.dead) return
+    invoke('terminal', 'write', { id: pane.termId, data: text + '\r' }).catch(() => {})
+    if (pane.term) pane.term.focus()
+  }, 220)
+}
+
 async function spawnPane(pane, tab) {
   if (!pane || pane.termId || pane.dead || !pane.term || !pane.el || !pane.el.offsetParent) return
   try {
@@ -246,7 +296,8 @@ async function spawnPane(pane, tab) {
     })
     pane.termId = r.id
     panesByTerm.set(r.id, pane)
-    if (tab) { tab.title = r.title || tab.title; renderTabs() }
+    if (tab) { if (!tab.lockTitle) tab.title = r.title || tab.title; renderTabs() }
+    if (pane.initialCmd) { const cmd = pane.initialCmd; pane.initialCmd = ''; runInPane(pane, cmd) }
   } catch (e) {
     pane.dead = true
     pane.term.writeln('\x1b[31m[zzwork] 无法启动终端：' + String((e && e.message) || e) + '\x1b[0m')
@@ -427,14 +478,94 @@ function focusActive() {
 
 // ---------- 操作 ----------
 
-function newTab() {
+// ---------- 新建终端「批处理」悬停菜单 ----------
+
+let batchMenu = null
+let batchMenuList = []
+let batchMenuTimer = 0
+let batchMenuSeq = 0
+
+async function loadBatches(taskId) {
+  try {
+    const raw = await store('settings.get', { key: 'task:terms:' + taskId, dflt: '' })
+    const list = raw ? JSON.parse(raw) : []
+    return Array.isArray(list) ? list : []
+  } catch { return [] }
+}
+
+function hideBatchMenu() {
+  clearTimeout(batchMenuTimer)
+  batchMenuSeq++
+  if (batchMenu) batchMenu.classList.remove('on')
+}
+
+function scheduleHideBatchMenu() {
+  clearTimeout(batchMenuTimer)
+  batchMenuTimer = setTimeout(hideBatchMenu, 170)
+}
+
+function ensureBatchMenu() {
+  if (batchMenu) return batchMenu
+  batchMenu = document.createElement('div')
+  batchMenu.className = 'term-batchmenu'
+  const host = document.getElementById('ctx-host') || document.body
+  host.appendChild(batchMenu)
+  batchMenu.addEventListener('mouseenter', () => clearTimeout(batchMenuTimer))
+  batchMenu.addEventListener('mouseleave', scheduleHideBatchMenu)
+  batchMenu.addEventListener('click', (e) => {
+    const item = e.target.closest('.tbm-item')
+    if (!item) return
+    const i = Number(item.getAttribute('data-i'))
+    hideBatchMenu()
+    if (i < 0) newTab()
+    else { const b = batchMenuList[i]; if (b) newTab(b) }
+  })
+  return batchMenu
+}
+
+async function showBatchMenu(anchor) {
+  clearTimeout(batchMenuTimer)
+  if (!currentTaskId) return
+  const seq = ++batchMenuSeq
+  batchMenuList = await loadBatches(currentTaskId)
+  if (seq !== batchMenuSeq) return
+  const menu = ensureBatchMenu()
+  const items = [`<div class="tbm-item" data-i="-1"><i data-lucide="terminal" style="width:13px;height:13px"></i><span class="nm">新建空白终端</span></div>`]
+  if (batchMenuList.length) {
+    items.push('<div class="tbm-sep"></div>')
+    batchMenuList.forEach((b, i) => {
+      const first = String(b.cmd || '').split(/\r?\n/).map((s) => s.trim()).find(Boolean) || ''
+      items.push(`<div class="tbm-item" data-i="${i}" title="${esc(first || '（未配置命令）')}">
+        <i data-lucide="play" style="width:13px;height:13px"></i>
+        <span class="nm">${esc(b.name || '未命名批处理')}</span>
+        ${first ? `<span class="cmd">${esc(first)}</span>` : ''}
+      </div>`)
+    })
+  } else {
+    items.push(`<div class="tbm-empty">在任务信息中配置批处理后，可在此一键执行</div>`)
+  }
+  menu.innerHTML = items.join('')
+  refreshIcons()
+  const r = anchor.getBoundingClientRect()
+  const w = menu.offsetWidth || 220
+  let left = Math.round(r.right - w)
+  left = Math.max(8, Math.min(left, window.innerWidth - w - 8))
+  menu.style.left = left + 'px'
+  menu.style.top = Math.round(r.bottom + 4) + 'px'
+  menu.classList.add('on')
+}
+
+function newTab(batch) {
   if (!currentTaskId) return
   const ts = taskState(currentTaskId)
   if (ts.tabs.length >= MAX_TABS) { toast('终端标签数量已达上限', 'warn'); return }
   const paneId = uuid()
   const pane = mkPane(paneId, currentTaskId)
+  const cmd = batch ? String(batch.cmd || '') : ''
+  if (cmd.trim()) pane.initialCmd = cmd
   ts.panes.set(paneId, pane)
-  const tab = { id: uuid(), title: '终端', layout: { type: 'leaf', id: paneId }, activePaneId: paneId }
+  const named = !!(batch && String(batch.name || '').trim())
+  const tab = { id: uuid(), title: named ? batch.name.trim() : '终端', lockTitle: named, layout: { type: 'leaf', id: paneId }, activePaneId: paneId }
   ts.tabs.push(tab)
   ts.activeTabId = tab.id
   ts.open = true
@@ -513,6 +644,7 @@ export function toggleTerminal(force) {
     if (!ts.tabs.length) newTab()
     else { renderPanel(); setTimeout(focusActive, 60) }
   } else {
+    hideBatchMenu()
     const tab = activeTab(ts)
     const pane = tab && ts.panes.get(tab.activePaneId)
     if (pane && pane.term) pane.term.blur()
@@ -521,6 +653,7 @@ export function toggleTerminal(force) {
 
 export async function attachTaskTerminal(taskId) {
   currentTaskId = taskId
+  hideBatchMenu()
   if (!panel) return
   if (!taskId) { panel.classList.remove('on'); syncToggle(); return }
   const ts = await loadStored(taskId)
@@ -557,6 +690,17 @@ export function initTerminalView() {
   if (toggle) toggle.addEventListener('click', () => toggleTerminal())
   const on2 = (id, fn) => { const el = $(id); if (el) el.addEventListener('click', fn) }
   on2('#termNew', () => newTab())
+  const termNewBtn = $('#termNew')
+  if (termNewBtn) {
+    termNewBtn.addEventListener('mouseenter', () => showBatchMenu(termNewBtn))
+    termNewBtn.addEventListener('mouseleave', scheduleHideBatchMenu)
+  }
+  document.addEventListener('mousedown', (e) => {
+    if (!batchMenu || !batchMenu.classList.contains('on')) return
+    if (batchMenu.contains(e.target)) return
+    if (termNewBtn && termNewBtn.contains(e.target)) return
+    hideBatchMenu()
+  }, true)
   on2('#termSplitH', () => splitActive('row'))
   on2('#termSplitV', () => splitActive('col'))
   on2('#termMax', toggleMax)

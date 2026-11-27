@@ -68,6 +68,45 @@ export default [
     })
   },
   {
+    name: '本次问答只统计回合内改动，不带入问答前已有的脏文件（Git）',
+    run: () => withTaskDir(async (dir) => {
+      const g = (args) => execFileSync('git', ['-C', dir, ...args], { stdio: 'pipe', windowsHide: true })
+      g(['init', '-q'])
+      g(['config', 'user.email', 't@t.t'])
+      g(['config', 'user.name', 't'])
+      g(['config', 'commit.gpgsign', 'false'])
+      fs.writeFileSync(path.join(dir, 'a.txt'), 'one\ntwo\nthree\n')
+      fs.writeFileSync(path.join(dir, 'b.txt'), 'bee\n')
+      g(['add', '.'])
+      g(['commit', '-q', '-m', 'init'])
+
+      const task = { path: dir }
+      const env = { kind: 'local', unixPath: dir }
+
+      // 问答前：a.txt 已有未提交改动
+      fs.writeFileSync(path.join(dir, 'a.txt'), 'one\ntwo-CHANGED-BEFORE\nthree\n')
+      const start = await changes.captureTurn(task, env)
+      assert.ok(start && start.kind === 'git' && start.files instanceof Map, 'git 仓库应记录回合起始脏文件快照')
+
+      // 本回合：继续改 a.txt（+four）并新建 c.txt
+      fs.writeFileSync(path.join(dir, 'a.txt'), 'one\ntwo-CHANGED-BEFORE\nthree\nfour\n')
+      fs.writeFileSync(path.join(dir, 'c.txt'), 'ccc\n')
+      const d = await changes.turnDiff(task, env, start)
+
+      const a = d.files.find((f) => f.path === 'a.txt')
+      assert.ok(a, 'a.txt 本回合有改动应出现')
+      assert.equal(a.adds, 1, '只统计本回合新增的 1 行')
+      assert.equal(a.dels, 0, '问答前已有的改动不算本回合删除')
+      assert.ok(!a.patch.includes('+two-CHANGED-BEFORE'), '问答前已有的改行不应作为本回合新增出现')
+      assert.ok(a.patch.includes('+four'), '本回合新增行应出现在 patch 中')
+
+      const c = d.files.find((f) => f.path === 'c.txt')
+      assert.ok(c && c.status === 'added', '本回合新建的 c.txt 应记为新增')
+
+      assert.ok(!d.files.find((f) => f.path === 'b.txt'), '未改动的 b.txt 不应出现')
+    })
+  },
+  {
     name: 'AI 自身改动已基线，不再带入下次请求（Git）',
     run: () => withTaskDir(async (dir) => {
       const g = (args) => execFileSync('git', ['-C', dir, ...args], { stdio: 'pipe', windowsHide: true })

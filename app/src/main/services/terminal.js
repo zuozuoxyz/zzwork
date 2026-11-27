@@ -1,6 +1,7 @@
 // 终端服务：每个任务按所在环境开交互式 PTY（本机 node-pty / WSL wsl.exe / SSH ssh2 shell）
 const os = require('os')
 const fs = require('fs')
+const path = require('path')
 const crypto = require('crypto')
 const { execFile, execFileSync } = require('child_process')
 const { getStore } = require('./store')
@@ -60,6 +61,8 @@ function exitWith(entry, code, error) {
 let localShellCache
 function localShell() {
   if (localShellCache !== undefined) return localShellCache
+  // 非 Windows（Linux/macOS）：用用户登录 shell，退回 bash
+  if (process.platform !== 'win32') { localShellCache = process.env.SHELL || '/bin/bash'; return localShellCache }
   for (const exe of ['pwsh.exe', 'powershell.exe']) {
     try { execFileSync('where', [exe], { stdio: 'ignore' }); localShellCache = exe; return exe } catch {}
   }
@@ -77,6 +80,7 @@ function shellTitle(env, task) {
   if (env.kind === 'wsl') return 'WSL · ' + (env.distro || (env.config && env.config.distro) || 'Linux')
   if (env.kind === 'ssh') return 'SSH · ' + ((env.config && env.config.user) ? env.config.user + '@' : '') + ((env.config && env.config.host) || env.id)
   const exe = localShell()
+  if (process.platform !== 'win32') return path.basename(exe) || 'Shell'
   return exe.startsWith('pwsh') ? 'pwsh' : exe.startsWith('powershell') ? 'PowerShell' : '命令提示符'
 }
 
@@ -152,7 +156,8 @@ async function create({ taskId, cols, rows, paneId }) {
       cwd = os.homedir()
     }
     entry.cwd = cwd
-    entry.pty = pty.spawn(localShell(), ['-NoLogo'], { name: 'xterm-256color', cols: c, rows: r, cwd, env: process.env })
+    const shellArgs = process.platform === 'win32' ? ['-NoLogo'] : []
+    entry.pty = pty.spawn(localShell(), shellArgs, { name: 'xterm-256color', cols: c, rows: r, cwd, env: process.env })
     if (warn) pushData(entry, warn)
   }
 

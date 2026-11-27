@@ -33,32 +33,33 @@ function stableStr(v) {
 }
 
 // ---- 底层文件操作（本地/WSL 用 fs，ssh 用 SFTP）----
+// 一律异步：\\wsl$ 等 9p/UNC 路径同步读写在主线程会阻塞数秒（界面无响应），转 libuv 线程池
 async function fileExists(p) {
   const r = parseRemotePath(p)
   if (r) { try { return await remotefs().exists(r.envId, r.remotePath) } catch { return false } }
-  try { return fs.existsSync(p) } catch { return false }
+  try { await fs.promises.access(p); return true } catch { return false }
 }
 async function fileRead(p) {
   const r = parseRemotePath(p)
   if (r) return remotefs().readFile(r.envId, r.remotePath)
-  return fs.readFileSync(p, 'utf8')
+  return fs.promises.readFile(p, 'utf8')
 }
 async function fileWrite(p, text) {
   const r = parseRemotePath(p)
   if (r) return remotefs().writeFile(r.envId, r.remotePath, text)
-  fs.mkdirSync(path.dirname(p), { recursive: true })
-  fs.writeFileSync(p, text)
+  await fs.promises.mkdir(path.dirname(p), { recursive: true })
+  await fs.promises.writeFile(p, text)
 }
 async function fileAppend(p, text) {
   const r = parseRemotePath(p)
   if (r) return remotefs().appendText(r.envId, r.remotePath, text)
-  fs.mkdirSync(path.dirname(p), { recursive: true })
-  fs.appendFileSync(p, text)
+  await fs.promises.mkdir(path.dirname(p), { recursive: true })
+  await fs.promises.appendFile(p, text)
 }
 async function fileRemove(p) {
   const r = parseRemotePath(p)
   if (r) return remotefs().remove(r.envId, r.remotePath)
-  try { fs.rmSync(p, { recursive: true, force: true }) } catch {}
+  try { await fs.promises.rm(p, { recursive: true, force: true }) } catch {}
 }
 async function dirNames(p) {
   const r = parseRemotePath(p)
@@ -66,7 +67,7 @@ async function dirNames(p) {
     try { return (await remotefs().readDir(r.envId, r.remotePath)).filter((d) => d.dir).map((d) => d.name) }
     catch { return [] }
   }
-  try { return fs.readdirSync(p, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name) }
+  try { return (await fs.promises.readdir(p, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name) }
   catch { return [] }
 }
 

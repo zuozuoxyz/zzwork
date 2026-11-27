@@ -530,6 +530,45 @@ export async function closeFile(path) {
   }
 }
 
+// 批量关闭文件 tab（关闭右侧 / 左侧 / 全部）；有未保存改动时统一确认一次
+export async function closeFiles(paths) {
+  const set = new Set((Array.isArray(paths) ? paths : []).filter(Boolean))
+  if (!set.size) return
+  const targets = state.fileTabs.filter((t) => set.has(t.path))
+  if (!targets.length) return
+  const dirty = targets.filter((t) => {
+    const e = models.get(t.path)
+    return (e && e.dirty) || t.dirty
+  })
+  if (dirty.length) {
+    const names = dirty.map((t) => t.name)
+    const ok = await dialog('confirm', {
+      message: `有 ${names.length} 个文件未保存，仍要关闭吗？`,
+      detail: names.slice(0, 8).join('、') + (names.length > 8 ? ' 等' : '') + '\n关闭后本次改动将丢失。'
+    })
+    if (!ok) return
+  }
+  for (const t of targets) {
+    const entry = models.get(t.path)
+    if (entry) { try { entry.model.dispose() } catch {}; models.delete(t.path) }
+  }
+  state.fileTabs = state.fileTabs.filter((t) => !set.has(t.path))
+  persistMemory(state.taskId)
+  const activeClosed = set.has(state.activeFile)
+  if (activeClosed) {
+    state.activeFile = null
+    const next = state.fileTabs[state.fileTabs.length - 1]
+    if (next) await activate(next.path)
+    else {
+      state.pane = 'info'
+      hidePreview()
+      hideFileBar()
+      document.querySelectorAll('.pane').forEach((p) => p.classList.toggle('on', p.id === 'pane-info'))
+    }
+  }
+  emit('tabs-changed')
+}
+
 export async function saveActive() {
   const path = state.activeFile
   const tab = path && state.fileTabs.find((t) => t.path === path)

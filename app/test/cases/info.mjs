@@ -26,36 +26,6 @@ export default [
     }
   },
   {
-    name: 'TODO 添加 / 完成 / 删除',
-    async run(app) {
-      await ensureTask(app, '主任务改名')
-      await selectTask(app, '主任务改名')
-      const addTodo = (text) => app.call((v) => {
-        const el = document.querySelector('#todoInput')
-        if (!el) throw new Error('todoInput 不存在')
-        el.value = v
-        el.dispatchEvent(new Event('input', { bubbles: true }))
-        el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
-        return el.value
-      }, text)
-      await addTodo('待办一')
-      await app.waitFor(`document.querySelectorAll('#todoList .todo').length === 1`)
-      await addTodo('待办二')
-      await app.waitFor(`document.querySelectorAll('#todoList .todo').length === 2`)
-      const counter = await app.call(() => [...document.querySelectorAll('#infoBody .sec')].find((s) => s.textContent.includes('TODO')).textContent)
-      assert.ok(counter.includes('0 / 2'), counter)
-      await app.click('#todoList .todo .bx')
-      await app.waitFor(`document.querySelectorAll('#todoList .todo.done').length === 1`)
-      const t = (await app.store('tasks.list')).find((x) => x.name === '主任务改名')
-      let todos = await app.store('todos.list', { taskId: t.id })
-      assert.equal(todos.filter((x) => x.status === 'done').length, 1)
-      await app.click('#todoList .todo:nth-child(2) .rm')
-      await app.waitFor(`document.querySelectorAll('#todoList .todo').length === 1`)
-      todos = await app.store('todos.list', { taskId: t.id })
-      assert.equal(todos.length, 1)
-    }
-  },
-  {
     name: '切换所属组',
     async run(app) {
       await ensureTask(app, '主任务改名')
@@ -216,13 +186,14 @@ export default [
     }
   },
   {
-    name: '状态栏任务与 TODO 进度',
+    name: '标题栏任务名',
     async run(app) {
       await ensureTask(app, '主任务改名')
       await selectTask(app, '主任务改名')
       const st = await app.text('#stTask')
       assert.ok(st.includes('主任务改名'), st)
-      assert.ok(/\d+\/\d+/.test(st), st)
+      assert.ok(!/✓/.test(st), '任务名不应带对号前缀: ' + st)
+      assert.ok(!/\d+\/\d+/.test(st), '任务名不应带进度数字: ' + st)
       const right = await app.text('#stRight')
       assert.ok(right.includes('环境'), right)
     }

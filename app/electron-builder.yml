@@ -41,3 +41,12 @@ mac:
   target:
     - dmg
     - zip
+linux:
+  icon: build/icon.png
+  category: Development
+  # 与内置更新检查的资产名一致：zzwork-<version>.AppImage
+  artifactName: zzwork-${version}.${ext}
+  target:
+    - AppImage
+    - deb
+    - tar.gz

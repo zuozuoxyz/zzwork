@@ -89,6 +89,7 @@ async function check(payload) {
 
 function assetName(version) {
   if (process.platform === 'win32') return `zzwork-${version}-setup.exe`
+  if (process.platform === 'linux') return `zzwork-${version}.AppImage`
   return `zzwork-${version}-mac-${process.arch === 'arm64' ? 'arm64' : 'x64'}.dmg`
 }
 
@@ -164,6 +165,11 @@ async function install() {
   if (downloading) return { ok: false, reason: 'busy' }
   if (!info || !info.hasUpdate) return { ok: false, reason: 'latest' }
   if (!app.isPackaged) return { ok: false, reason: 'dev' }
+  // Linux 暂无稳定的自更新通道（AppImage 需手动替换）：打开 Release 页面由用户下载
+  if (process.platform === 'linux') {
+    try { await shell.openExternal(LATEST_URL) } catch {}
+    return { ok: false, reason: 'linux', message: '已在浏览器打开下载页，请下载新版 AppImage 替换后重启' }
+  }
   const version = info.version
   const asset = assetName(version)
   const url = `https://github.com/${REPO}/releases/download/v${version}/${asset}`

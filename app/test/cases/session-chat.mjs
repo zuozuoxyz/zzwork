@@ -204,11 +204,14 @@ export default [
         await app.waitFor(`[...document.querySelectorAll('.workbox .thinktext')].some(e=>e.textContent.includes('先拆解问题'))`, 10000, '思考过程渲染')
         await app.waitFor(`(async () => {
           const msgs = await window.zzwork.invoke('store', 'messages.list', { taskId: ${JSON.stringify(t.id)} })
-          const last = msgs[msgs.length - 1]
+          // 回合结束后的「会话摘要/任务简介」等 aux 卡片可能晚于正文落库，需只取最后一条正文助手消息
+          const xs = msgs.filter((m) => m.role === 'assistant' && ((m.kind || 'text') === 'text'))
+          const last = xs[xs.length - 1]
           return !!(last && String(last.meta || '').includes('先拆解问题'))
         })()`, 10000, '思考过程落库')
         const msgs = await messagesOf(app, t.id)
-        assert.equal(msgs[msgs.length - 1].content, '答案是 221。', '思考过程不应混入正文')
+        const xs = msgs.filter((m) => m.role === 'assistant' && ((m.kind || 'text') === 'text'))
+        assert.equal(xs[xs.length - 1].content, '答案是 221。', '思考过程不应混入正文')
       } finally {
         await server.close()
         await bindTask(app, '主任务改名', { model_id: '' })

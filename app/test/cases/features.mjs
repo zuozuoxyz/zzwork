@@ -256,8 +256,9 @@ export default [
       const created = tasks.find((x) => x.name.includes('做一个全新的功能界面'))
       assert.ok(created, '新任务应存在')
       assert.equal(created.type, 'work')
-      const ses = await app.store('sessions.list', { taskId: created.id })
-      assert.equal(ses.length, 1, '新任务应有默认会话')
+      // 归类不再自动执行：只把需求文本写入该任务的会话提示词，会话在用户打开 AI 标签时按需创建
+      const prompt = await app.store('settings.get', { key: 'session:prompt:' + created.id, dflt: '' })
+      assert.ok(String(prompt || '').includes('做一个全新的功能界面'), '需求文本应写入会话提示词')
       assert.equal(fs.readFileSync(inboxFile, 'utf8'), '', '应用后便签应清空')
 
       // 便签无关闭按钮：点活动栏「项目」离开
@@ -535,7 +536,10 @@ export default [
       assert.ok(short, '短期任务应创建')
       assert.equal(short.scope, 'long')
       assert.equal(short.group_id, gid, '短期任务应归入所选分组')
-      assert.equal(await app.store('sessions.list', { taskId: short.id }).then((s) => s.length), 1, '短期任务应有默认会话')
+      // 归类不自动建会话：需求文本写入会话提示词，会话在用户打开 AI 标签时按需创建
+      assert.equal(await app.store('sessions.list', { taskId: short.id }).then((s) => s.length), 0, '短期任务不预先建会话')
+      const shortPrompt = await app.store('settings.get', { key: 'session:prompt:' + short.id, dflt: '' })
+      assert.ok(String(shortPrompt || '').includes('分组短期任务'), '需求文本应写入短期任务的会话提示词')
       assert.ok(!tasks.some((x) => x.name === '忽略的需求'), '忽略项不应创建任务')
     }
   },

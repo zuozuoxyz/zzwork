@@ -19,8 +19,7 @@ let running = false
 let runId = null
 let orchestrateActive = false
 let allowDelta = true
-let frame = 0
-let mention = { open: false, items: [], idx: 0, start: 0, end: 0, dir: '', currentKey: '' }
+let mention = { open: false, items: [], idx: 0, start: 0, end: 0, dir: '', mode: 'root', currentKey: '', truncated: false }
 
 // 待发送的图片附件：dataUrl 全分辨率，thumb 为 ~320px 缩略图（气泡/发送用）
 let pendingAttachments = []
@@ -41,6 +40,8 @@ const DIFF_INLINE_LIMIT = 2400
 const STATUS_TEXT = { pending: '等待中', running: '运行中', done: '已完成', stopped: '已停止', error: '失败', draft: '草稿' }
 const MENTION_SKIP = new Set(['node_modules', 'out', 'release', 'dist', 'build', '.zzwork', '.next',
   'target', '.venv', 'venv', '__pycache__', '.idea', '.vs', '.cache', 'coverage'])
+// @ 选择器单栏最多渲染的条目数：大目录一次性渲染上千行 + 全量 lucide 扫描会阻塞主线程导致“未响应”
+const MENTION_MAX = 200
 
 function parseMeta(m) {
   if (!m) return {}
@@ -422,6 +423,8 @@ export function initChatView() {
   // 切到 AI 对话时滚到最新一条（首次打开任务时 pane 尚未可见，renderChat 里滚动无效）
   on('pane-changed', (name) => {
     if (name === 'ai' && taskId) {
+      // 离开 AI 页时暂停了流式重排，切回时补渲染一次最新内容
+      if (running && messages.length) scheduleStreamRender(messages[messages.length - 1])
       requestAnimationFrame(() => scrollBottom(true))
       markTaskRead(taskId)
     }
@@ -500,6 +503,7 @@ function resetHeader() {
   runId = null
   orchestrateActive = false
   allowDelta = true
+  cancelStreamRender()
   hideMention()
   clearAttachments()
   shells = []
@@ -935,6 +939,7 @@ function diffPre(text) {
 }
 
 function renderAll() {
+  cancelStreamRender() // 整段重渲染会取代尚未执行的流式局部渲染，避免其随后又覆盖一次
   const inner = $('#chatInner')
   if (!messages.length) {
     inner.innerHTML = `<div class="empty">还没有对话。在下方输入需求，Enter 发送。</div>`
@@ -1202,6 +1207,7 @@ export function handleEvent(ev) {
     return
   }
   if (type === 'done') {
+    cancelStreamRender()
     const wasOrchestrate = orchestrateActive
     running = false
     runId = null
@@ -1393,38 +1399,60 @@ function partsSig(parts, plan) {
   return s + '|p' + (plan || []).map((x) => (x.status || '') + String(x.text || '').length).join(',')
 }
 
+// 流式渲染节流：把每帧全量重排降为约 90ms 一次，避免不断增长的文本被反复解析/重排（O(n²) 卡顿）
+let streamTimer = 0
+let pendingStreamMsg = null
+let lastStreamAt = 0
+const STREAM_MIN_INTERVAL = 90
+const STREAM_MAX_INTERVAL = 500
 function scheduleStreamRender(msg) {
-  if (frame) return
-  frame = requestAnimationFrame(() => {
-    frame = 0
-    const els = document.querySelectorAll('#chatInner .msg.a')
-    const el = els[els.length - 1]
-    if (!el) { renderAll(); return }
-    const container = el.querySelector('.parts')
-    if (!container) { renderAll(); return }
-    const sig = partsSig(msg.parts, msg.plan)
-    if (container.dataset.sig !== sig) {
-      // 结构变化才整体重排；保留用户手动展开的 details 状态
-      const open = []
-      container.querySelectorAll(':scope > details').forEach((d, i) => { open[i] = d.open })
-      container.innerHTML = renderParts(msg.parts, true, msg.plan)
-      container.querySelectorAll(':scope > details').forEach((d, i) => { if (open[i] != null) d.open = open[i] })
-      container.dataset.sig = sig
-      refreshIcons()
-      container.querySelectorAll('.abody').forEach((b) => {
-        highlightIn(b)
-        enhanceMarkdown(b, { root: taskRoot() })
-      })
-    }
-    let foot = el.querySelector('.turnfoot')
-    if (!foot) {
-      foot = document.createElement('div')
-      foot.className = 'turnfoot'
-      el.appendChild(foot)
-    }
-    foot.innerHTML = footHtml(msg, true)
-    scrollBottom(false)
-  })
+  pendingStreamMsg = msg
+  if (streamTimer) return
+  // 文本越长节流越狠：整段 markdown 每帧全量重解析是 O(n²)，长回复时降低刷新频率以压住主线程
+  const len = (msg && msg.content) ? msg.content.length : 0
+  const interval = Math.min(STREAM_MAX_INTERVAL, STREAM_MIN_INTERVAL + Math.floor(len / 120))
+  const wait = Math.max(0, interval - (Date.now() - lastStreamAt))
+  streamTimer = setTimeout(() => {
+    streamTimer = 0
+    lastStreamAt = Date.now()
+    const m = pendingStreamMsg
+    pendingStreamMsg = null
+    if (!m) return
+    // 不在 AI 对话页时不重排（留到切回或结束时统一渲染），避免切页/移窗时与流式重排叠加卡顿
+    if (state.pane !== 'ai') { pendingStreamMsg = m; return }
+    flushStreamRender(m)
+  }, wait)
+}
+function cancelStreamRender() {
+  if (streamTimer) { clearTimeout(streamTimer); streamTimer = 0 }
+  pendingStreamMsg = null
+}
+function flushStreamRender(msg) {
+  const els = document.querySelectorAll('#chatInner .msg.a')
+  const el = els[els.length - 1]
+  if (!el) { renderAll(); return }
+  const container = el.querySelector('.parts')
+  if (!container) { renderAll(); return }
+  const sig = partsSig(msg.parts, msg.plan)
+  if (container.dataset.sig !== sig) {
+    // 结构变化才整体重排；保留用户手动展开的 details 状态
+    const open = []
+    container.querySelectorAll(':scope > details').forEach((d, i) => { open[i] = d.open })
+    container.innerHTML = renderParts(msg.parts, true, msg.plan)
+    container.querySelectorAll(':scope > details').forEach((d, i) => { if (open[i] != null) d.open = open[i] })
+    container.dataset.sig = sig
+    refreshIcons()
+    // 流式期间跳过高成本的代码高亮与富内容增强（图片/路径探测、代码工具条、大量 IPC），
+    // 留到本轮 done 时的完整渲染统一处理，避免拖慢每一帧
+  }
+  let foot = el.querySelector('.turnfoot')
+  if (!foot) {
+    foot = document.createElement('div')
+    foot.className = 'turnfoot'
+    el.appendChild(foot)
+  }
+  foot.innerHTML = footHtml(msg, true)
+  scrollBottom(false)
 }
 
 // ---------- @ 文件/文件夹引用选择器（按目录逐层浏览） ----------
@@ -1476,58 +1504,82 @@ async function updateMention() {
   const relDir = slash >= 0 ? query.slice(0, slash) : ''
   const filter = (slash >= 0 ? query.slice(slash + 1) : query).toLowerCase()
   const entries = await listDirEntries(relDir)
-  if (!entries) { hideMention(); return }
-  let items = entries.filter((e) => e.name.toLowerCase().includes(filter))
-  // 子目录顶部提供「..」返回上一层（不入 items 过滤，始终可退）
+  if (!entries && relDir) { hideMention(); return }
+  let items
+  let mode
   if (relDir) {
+    // 进入子目录：单列文件浏览，顶部提供「..」返回上一层
+    mode = 'dir'
     const parts = relDir.split('/')
     parts.pop()
-    items = [{ name: '..', path: parts.join('/'), dir: true, up: true }, ...items]
+    const rest = (entries || []).filter((e) => e.name.toLowerCase().includes(filter))
+    mention.truncated = rest.length > MENTION_MAX
+    items = [{ name: '..', path: parts.join('/'), dir: true, up: true }].concat(rest.slice(0, MENTION_MAX))
+  } else {
+    // 根级：左右两栏——左「文件系统」列文件，右「智能体」列工作/代码任务
+    mode = 'root'
+    const all = (entries || []).filter((e) => e.name.toLowerCase().includes(filter))
+    mention.truncated = all.length > MENTION_MAX
+    const fileItems = all.slice(0, MENTION_MAX)
+    const taskItems = otherTaskItems(filter)
+    if (!fileItems.length && !taskItems.length) { hideMention(); return }
+    items = fileItems.concat(taskItems)
   }
-  // 根目录下无匹配则收起；进入子目录后即使无匹配也保留，便于「引用此目录」
-  if (!items.length && !relDir) { hideMention(); return }
   const prevKey = mention.currentKey
   mention.open = true
   mention.items = items
+  mention.mode = mode
   mention.dir = relDir
   mention.start = start
   mention.end = end
-  const found = items.findIndex((e) => e.path === prevKey)
+  const found = items.findIndex((e) => (e.task ? 'task:' + e.id : e.path) === prevKey)
   mention.idx = found >= 0 ? found : 0
   renderMention()
+}
+
+// 可 @ 引用的其他任务（排除当前任务与看板短任务）；按名称/简介过滤；work 在前、code 在后
+function otherTaskItems(filter) {
+  const f = String(filter || '').toLowerCase()
+  const list = (state.tasks || [])
+    .filter((t) => t.id !== taskId && (t.scope || 'long') !== 'board')
+    .filter((t) => !f || String(t.name || '').toLowerCase().includes(f) || String(t.brief || '').toLowerCase().includes(f))
+    .slice(0, f ? 14 : 12)
+  const isCode = (t) => t.type === 'code'
+  list.sort((a, b) => (isCode(a) ? 1 : 0) - (isCode(b) ? 1 : 0))
+  return list.map((t) => ({
+    name: t.name, task: true, id: t.id, insert: '@[' + t.name + ']',
+    brief: t.brief || '', type: isCode(t) ? 'code' : 'work'
+  }))
+}
+
+// 单行渲染：目录/文件/任务/.. 共用（i 为在 mention.items 中的下标）
+function mentionRow(e, i) {
+  const on = i === mention.idx ? ' on' : ''
+  if (e.up) {
+    return `<div class="mi dir up${on}" data-act="up" data-i="${i}">
+      <i data-lucide="corner-up-left" style="width:13px;height:13px;color:#dcb67a"></i>
+      <span class="mn">..（上层）</span></div>`
+  }
+  if (e.task) {
+    return `<div class="mi task${on}" data-act="pick" data-i="${i}" title="${esc(e.brief || '')}">
+      <i data-lucide="bot" style="width:13px;height:13px;color:#2dd4bf"></i>
+      <span class="mn">${esc(e.name)}</span></div>`
+  }
+  if (e.dir) {
+    return `<div class="mi dir${on}" data-act="enter" data-i="${i}">
+      <i data-lucide="folder" style="width:13px;height:13px;color:#dcb67a"></i>
+      <span class="mn">${esc(e.name)}</span>
+      <span class="mref" data-act="ref" data-path="${esc(e.path)}">引用</span></div>`
+  }
+  return `<div class="mi${on}" data-act="pick" data-i="${i}">
+    <i data-lucide="file" style="width:13px;height:13px"></i>
+    <span class="mn">${esc(e.name)}</span></div>`
 }
 
 function renderMention() {
   const el = mentionEl()
   if (!el) return
-  const crumbs = mention.dir ? mention.dir.split('/') : []
-  let bc = `<div class="mbc"><a class="mcrumb" data-act="jump" data-path="">根目录</a>`
-  crumbs.forEach((c, i) => {
-    const p = crumbs.slice(0, i + 1).join('/')
-    bc += `<span class="msep">/</span><a class="mcrumb" data-act="jump" data-path="${esc(p)}">${esc(c)}</a>`
-  })
-  if (mention.dir) {
-    bc += `<span class="sp"></span><a class="mrefdir" data-act="refdir" data-path="${esc(mention.dir)}">引用此目录</a>`
-  }
-  bc += '</div>'
-  const rows = mention.items.map((e, i) => {
-    const on = i === mention.idx ? ' on' : ''
-    if (e.up) {
-      return `<div class="mi dir up${on}" data-act="up" data-i="${i}">
-        <i data-lucide="corner-up-left" style="width:13px;height:13px;color:#dcb67a"></i>
-        <span class="mn">..（上层）</span></div>`
-    }
-    if (e.dir) {
-      return `<div class="mi dir${on}" data-act="enter" data-i="${i}">
-        <i data-lucide="folder" style="width:13px;height:13px;color:#dcb67a"></i>
-        <span class="mn">${esc(e.name)}</span>
-        <span class="mref" data-act="ref" data-path="${esc(e.path)}">引用</span></div>`
-    }
-    return `<div class="mi${on}" data-act="pick" data-i="${i}">
-      <i data-lucide="file" style="width:13px;height:13px"></i>
-      <span class="mn">${esc(e.name)}</span></div>`
-  }).join('')
-  el.innerHTML = bc + rows
+  el.innerHTML = mention.mode === 'dir' ? renderDirMention() : renderRootMention()
   el.style.display = 'block'
   refreshIcons()
   el.onmousedown = (ev) => {
@@ -1543,6 +1595,47 @@ function renderMention() {
   }
   const on = el.querySelector('.mi.on')
   if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest' })
+}
+
+// 根级：左「文件系统」列文件/目录，右「智能体」列 work / code 任务
+function renderRootMention() {
+  const fileRows = []
+  const workRows = []
+  const codeRows = []
+  mention.items.forEach((e, i) => {
+    const html = mentionRow(e, i)
+    if (e.task) { (e.type === 'code' ? codeRows : workRows).push(html) }
+    else fileRows.push(html)
+  })
+  const fileCol = `<div class="mcol">
+      <div class="mcolh">${ic('folder-tree', 12)} 文件系统</div>
+      <div class="mcollist">${fileRows.length ? fileRows.join('') : '<div class="mempty">无匹配文件</div>'}${mention.truncated ? `<div class="mempty">已显示前 ${MENTION_MAX} 项，继续输入缩小范围</div>` : ''}</div>
+    </div>`
+  const taskInner = []
+  if (workRows.length) taskInner.push(`<div class="mgroup">work</div>${workRows.join('')}`)
+  if (codeRows.length) taskInner.push(`<div class="mgroup">code</div>${codeRows.join('')}`)
+  const taskCol = `<div class="mcol">
+      <div class="mcolh">${ic('bot', 12)} 智能体</div>
+      <div class="mcollist">${taskInner.length ? taskInner.join('') : '<div class="mempty">无匹配任务</div>'}</div>
+    </div>`
+  return `<div class="mcols">${fileCol}${taskCol}</div>`
+}
+
+// 子目录：面包屑 + 返回上级 + 文件列表（单列）
+function renderDirMention() {
+  const crumbs = mention.dir ? mention.dir.split('/') : []
+  let bc = `<div class="mbc"><a class="mcrumb" data-act="jump" data-path="">根目录</a>`
+  crumbs.forEach((c, i) => {
+    const p = crumbs.slice(0, i + 1).join('/')
+    bc += `<span class="msep">/</span><a class="mcrumb" data-act="jump" data-path="${esc(p)}">${esc(c)}</a>`
+  })
+  if (mention.dir) {
+    bc += `<span class="sp"></span><a class="mrefdir" data-act="refdir" data-path="${esc(mention.dir)}">引用此目录</a>`
+  }
+  bc += '</div>'
+  const rows = mention.items.map((e, i) => mentionRow(e, i)).join('')
+  const hint = mention.truncated ? `<div class="mempty">已显示前 ${MENTION_MAX} 项，继续输入缩小范围</div>` : ''
+  return bc + rows + hint
 }
 
 function hideMention() {
@@ -1565,11 +1658,12 @@ function replaceMention(insert) {
   return caret
 }
 
-// Tab/→：选择（文件夹进入、文件即引用）
+// Tab/→：选择（文件夹进入、文件即引用、任务即引用）
 function chooseEntry(i) {
   const e = mention.items[i]
   if (!e) return
   if (e.up) { goUp(); return }
+  if (e.task) { insertTask(e.insert); return }
   if (e.dir) { mention.currentKey = ''; replaceMention('@' + e.path + '/'); updateMention(); return }
   insertRef(e.path, false)
 }
@@ -1579,7 +1673,16 @@ function confirmEntry(i) {
   const e = mention.items[i]
   if (!e) return
   if (e.up) { goUp(); return }
+  if (e.task) { insertTask(e.insert); return }
   insertRef(e.path, e.dir)
+}
+
+// 引用其他任务：插入 @[任务名] 标记，发送时由主进程注入该任务只读上下文
+function insertTask(token) {
+  if (!token) return
+  replaceMention(token + ' ')
+  hideMention()
+  $('#chatInput').focus()
 }
 
 // 引用目标（文件或文件夹）并收起选择器
@@ -1624,5 +1727,5 @@ function mentionKey(e) {
 
 function syncKey() {
   const e = mention.items[mention.idx]
-  mention.currentKey = e ? e.path : ''
+  mention.currentKey = e ? (e.task ? 'task:' + e.id : e.path) : ''
 }

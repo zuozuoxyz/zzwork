@@ -173,11 +173,6 @@ function handlers() {
     'tasks.trashed': () => S().listTrashedTasks(),
     'tasks.emptyTrash': () => S().emptyTrash(),
 
-    'todos.list': (p) => S().listTodos(p.taskId),
-    'todos.add': (p) => S().addTodo(p.taskId, p.title),
-    'todos.setStatus': (p) => S().setTodoStatus(p.id, p.status),
-    'todos.delete': (p) => S().deleteTodo(p.id),
-
     'messages.list': (p) => S().listMessages(p.taskId, p.sessionId),
     'messages.add': (p) => S().addMessage(p.taskId, p.role, p.content, p.opts),
     'messages.update': (p) => S().updateMessage(p.id, p.patch),

@@ -39,6 +39,33 @@ function post(payload) {
   if (win && !win.isDestroyed()) win.webContents.send('zz:chat:event', payload)
 }
 
+// 合并上游高频流片段，减少 IPC 消息量：同类型（delta/thinking）文本累积后约 40ms 下发一次；
+// 遇到结构性事件（step/plan/done…）先 flush 再发，保证先后顺序不乱。
+function makeStream({ taskId, sessionId, runId }) {
+  const raw = (o) => post({ taskId, sessionId, runId, ...o })
+  let type = ''
+  let buf = ''
+  let timer = null
+  const flush = () => {
+    if (timer) { clearTimeout(timer); timer = null }
+    if (buf && type) { raw({ type, text: buf }); buf = '' }
+    type = ''
+  }
+  const push = (t, text) => {
+    if (!text) return
+    if (type && type !== t) flush()
+    type = t
+    buf += text
+    if (!timer) timer = setTimeout(flush, 40)
+  }
+  return {
+    emit: (o) => { flush(); raw(o) },
+    delta: (text) => push('delta', text),
+    thinking: (text) => push('thinking', text),
+    flush
+  }
+}
+
 // 辅助 LLM 调用（功能网络/实现逻辑/摘要/简介）可见化：在对话里以可折叠卡片展示 start → done/error
 function auxStart(taskId, sessionId, title) {
   const S = getStore()
@@ -110,8 +137,8 @@ async function persistAttachments({ task, attachments }) {
         const rf = parseRemotePath(target)
         await remotefs.writeBase64(rf.envId, rf.remotePath, buf.toString('base64'))
       } else {
-        fs.mkdirSync(path.dirname(target), { recursive: true })
-        fs.writeFileSync(target, buf)
+        await fs.promises.mkdir(path.dirname(target), { recursive: true })
+        await fs.promises.writeFile(target, buf)
       }
       out.push({ name, path: target, rel: '.zzwork/uploads/' + name, mime: d.mime, size: buf.length, thumb: safeThumb(a.thumb), dataUrl: a.dataUrl })
     } catch { /* 单张失败不影响其余 */ }
@@ -406,8 +433,8 @@ async function readInfo(task) {
   if (old && !parseRemotePath(task.path)) {
     try {
       const dir = path.join(task.path, '.zzwork')
-      fs.mkdirSync(dir, { recursive: true })
-      fs.renameSync(path.join(task.path, 'info.md'), path.join(dir, 'info.md'))
+      await fs.promises.mkdir(dir, { recursive: true })
+      await fs.promises.rename(path.join(task.path, 'info.md'), path.join(dir, 'info.md'))
     } catch {}
   }
   return old
@@ -481,9 +508,9 @@ async function appendChatFile(task, role, content, meta) {
       return
     }
     const dir = path.join(task.path, '.zzwork', 'chat')
-    fs.mkdirSync(dir, { recursive: true })
+    await fs.promises.mkdir(dir, { recursive: true })
     const file = path.join(dir, new Date().toISOString().slice(0, 10) + '.md')
-    fs.appendFileSync(file, body)
+    await fs.promises.appendFile(file, body)
   } catch {}
 }
 
@@ -801,13 +828,15 @@ async function processRun({ runId, entry, task, session, agent, model, env: envI
   post2({ type: 'user', text: userText, messageId: mid, attachments: saved })
 
   let ch = null
-  let turnStart = null
+  let turnStartP = null
   try {
     const collectP = changes.collect({ task, agent, env, ck: parseMeta(session.meta).ck })
       .catch((e) => ({ text: '', summary: '变更检测失败：' + e.message, count: 0, detail: '', ck: null }))
-    const turnP = changes.captureTurn(task, env).catch(() => null)
+    // 回合开始的快照既要尽快启动，又必须在本轮执行前完成——否则执行体可能在快照前就改好了文件，
+    // 导致本次改动被算进基线、diff 卡片漏掉该文件。collect 与 capture 并行，两者都 await 后再分发。
+    const captureP = changes.captureTurn(task, env).catch(() => null)
     ch = await collectP
-    turnStart = await turnP
+    turnStartP = Promise.resolve(await captureP)
   } catch { ch = null }
 
   if (entry.aborted) {
@@ -834,9 +863,9 @@ async function processRun({ runId, entry, task, session, agent, model, env: envI
     post2({ type: 'phase', phase: 'changes', summary: ch.summary })
   }
 
-  if (agent.kind === 'builtin') runBuiltin({ runId, task, session, agent, model, changes: ch, env, turnStart, prompt: userText, attachments: savedFull, depth })
+  if (agent.kind === 'builtin') runBuiltin({ runId, task, session, agent, model, changes: ch, env, turnStartP, prompt: userText, attachments: savedFull, depth })
   else if (agent.kind === 'external') runExternal({ runId, task, session, agent, prompt: userText })
-  else runCli({ runId, task, session, agent, changes: ch, prompt: userText, env, turnStart, attachments: savedFull, depth })
+  else runCli({ runId, task, session, agent, changes: ch, prompt: userText, env, turnStartP, attachments: savedFull, depth })
 }
 
 // 外部执行体：把本任务的提问转发到远端被分享任务，用远端隐藏会话作答后回填到本地对话
@@ -884,10 +913,12 @@ async function runExternal({ runId, task, session, agent, prompt }) {
 }
 
 // 回合结束后的文件差异卡片：对话后展示本次改动的文件与 diff
-function scheduleTurnDiff({ task, session, runId, env, turnStart }) {
-  if (!turnStart) return
+function scheduleTurnDiff({ task, session, runId, env, turnStartP }) {
+  if (!turnStartP) return
   setTimeout(async () => {
     try {
+      const turnStart = await turnStartP
+      if (!turnStart) return
       const d = await changes.turnDiff(task, env, turnStart)
       if (!d || !Array.isArray(d.files) || !d.files.length) return
       const S = getStore()
@@ -1121,6 +1152,47 @@ function askGuidance(S, fromTaskId) {
   return parts.join('\n')
 }
 
+// 用户消息中通过 @[任务名] 引用的其他任务 → 只读上下文块（附简介/关键信息名，细节可 @@ASK 询问）
+const TASK_REF_RE = /@\[([^\]\n]{1,80})\]/g
+function taskRefContext(S, fromTaskId, text, canAsk) {
+  const names = []
+  const seen = new Set()
+  let m
+  TASK_REF_RE.lastIndex = 0
+  while ((m = TASK_REF_RE.exec(String(text || '')))) {
+    const n = String(m[1] || '').trim()
+    if (n && !seen.has(n)) { seen.add(n); names.push(n) }
+  }
+  if (!names.length) return ''
+  let tasks = []
+  try { tasks = S.listTasks().filter((t) => (t.scope || 'long') !== 'board' && t.id !== fromTaskId) } catch {}
+  const resolve = (q) => tasks.find((x) => x.id === q) || tasks.find((x) => String(x.name) === q)
+    || tasks.find((x) => String(x.name || '').toLowerCase() === q.toLowerCase())
+    || tasks.find((x) => String(x.name || '').includes(q)) || null
+  const lines = []
+  for (const n of names.slice(0, 8)) {
+    const t = resolve(n)
+    if (!t) { lines.push(`- 「${n}」：未找到该任务`); continue }
+    const tm = parseMeta(t.meta)
+    const kinfo = Array.isArray(tm.keyinfoNames) ? tm.keyinfoNames.slice(0, 8) : []
+    const b = String(t.brief || '').replace(/\s+/g, ' ').trim()
+    let s = `- 任务「${t.name}」（类型 ${t.type || 'work'}）`
+    if (b) s += '：' + b.slice(0, 400)
+    if (kinfo.length) s += `（掌握：${kinfo.join('、')}）`
+    let summ = ''
+    try {
+      const ss = S.listSessions(t.id).filter((x) => x.kind !== 'ask')
+      const m0 = ss[0]
+      if (m0 && m0.summary) summ = String(m0.summary).replace(/\s+/g, ' ').trim().slice(0, 500)
+    } catch {}
+    if (summ) s += `\n  最近进展：${summ}`
+    lines.push(s)
+  }
+  let out = '【用户引用的其他任务（只读参考）】\n' + lines.join('\n')
+  if (canAsk) out += '\n如需这些任务中未包含的具体细节，请输出 @@ASK 协议询问对应任务，不要编造。'
+  return out
+}
+
 function resolveAskTarget(S, spec) {
   const q = String(spec || '').trim()
   if (!q) return null
@@ -1215,9 +1287,10 @@ async function askRemote(taskId, question, fromLabel) {
   return { ok: true, answer }
 }
 
-async function runBuiltin({ runId, task, session, agent, model, changes: ch, env, turnStart, attachments, depth = 0 }) {
+async function runBuiltin({ runId, task, session, agent, model, changes: ch, env, turnStartP, prompt, attachments, depth = 0 }) {
   const S = getStore()
-  const post2 = (o) => post({ taskId: task.id, sessionId: session.id, runId, ...o })
+  const stream = makeStream({ taskId: task.id, sessionId: session.id, runId })
+  const post2 = stream.emit
   if (!model) {
     post2({ type: 'done', error: '未配置模型：请先在「模型」中添加并选择模型' })
     finishRun(runId, 'error', '')
@@ -1247,7 +1320,10 @@ async function runBuiltin({ runId, task, session, agent, model, changes: ch, env
   // 看板卡片任务不询问：没人坐等回答，问题只会卡住。看板任务把待确认的问题作为结论输出，卡片转待审核
   const canAsk = depth < ASK_MAX_DEPTH && (task.scope || 'long') !== 'board'
   // 易变的看板/工作区变更/跨任务清单拼到最后一条用户消息，system 保持稳定以命中前缀缓存
-  appendTailToLast(history, buildTurnTail(S, task, ch && ch.text ? ch.text : '', canAsk))
+  appendTailToLast(history, [
+    buildTurnTail(S, task, ch && ch.text ? ch.text : '', canAsk),
+    taskRefContext(S, task.id, prompt, canAsk)
+  ].filter(Boolean).join('\n\n'))
   let acc = ''
   let think = ''
   const usage = { input: 0, output: 0, cached: 0 }   // 本轮真实用量（跨 @@ASK 多轮累加）
@@ -1268,16 +1344,16 @@ async function runBuiltin({ runId, task, session, agent, model, changes: ch, env
         if (state.aborted) return
         roundText += d
         const safe = filter.push(d)
-        if (safe) { acc += safe; turnLog.text(safe); post2({ type: 'delta', text: safe }) }
+        if (safe) { acc += safe; turnLog.text(safe); stream.delta(safe) }
       }, controller.signal, (t) => {
         if (state.aborted) return
         think += t
         turnLog.think(t)
-        post2({ type: 'thinking', text: t })
+        stream.thinking(t)
       })
       if (u) { usage.input += u.input || 0; usage.output += u.output || 0; usage.cached += u.cached || 0 }
       const left = filter.flush()
-      if (left) { acc += left; turnLog.text(left); post2({ type: 'delta', text: left }) }
+      if (left) { acc += left; turnLog.text(left); stream.delta(left) }
       const asks = (canAsk && !state.aborted) ? parseAskMarkers(roundText) : []
       if (!asks.length || round >= ASK_MAX_ROUNDS) break
       const answers = []
@@ -1318,7 +1394,7 @@ async function runBuiltin({ runId, task, session, agent, model, changes: ch, env
     })
     finishRun(runId, 'done', acc, { input: inputTok, output: outputTok, cached: usage.cached })
     scheduleAfterTurn(task.id, session.id)
-    scheduleTurnDiff({ task, session, runId, env, turnStart })
+    scheduleTurnDiff({ task, session, runId, env, turnStartP })
   } catch (e) {
     if (state.aborted) {
       const content = acc + '\n(已停止)'
@@ -1331,7 +1407,7 @@ async function runBuiltin({ runId, task, session, agent, model, changes: ch, env
       post2({ type: 'done', content, durationMs: fin.durationMs, parts: cacheMeta.parts })
       await changes.saveBaseline(S, session.id, task, env, ch && ch.ck && ch.ck.kind)
       finishRun(runId, 'stopped', content)
-      scheduleTurnDiff({ task, session, runId, env, turnStart })
+      scheduleTurnDiff({ task, session, runId, env, turnStartP })
     } else {
       post2({ type: 'done', error: e.message })
       try { S.updateRun(runId, { error: e.message, finished_at: new Date().toISOString() }) } catch {}
@@ -1354,9 +1430,10 @@ function cliFailureHint(agent, content, model) {
   return `${agent.name} 的${m}在当前地区不可用：请在「环境」页为 ${agent.name} 选择其他模型。`
 }
 
-async function runCli({ runId, task, session, agent, changes: ch, prompt, env, turnStart, attachments, depth = 0 }) {
+async function runCli({ runId, task, session, agent, changes: ch, prompt, env, turnStartP, attachments, depth = 0 }) {
   const S = getStore()
-  const post2 = (o) => post({ taskId: task.id, sessionId: session.id, runId, ...o })
+  const stream = makeStream({ taskId: task.id, sessionId: session.id, runId })
+  const post2 = stream.emit
   const meta = { ...parseMeta(task.meta), ...parseMeta(session.meta) }
   const canAsk = depth < ASK_MAX_DEPTH && (task.scope || 'long') !== 'board'
   let selection = { skills: [], mcps: [] }
@@ -1393,6 +1470,8 @@ async function runCli({ runId, task, session, agent, changes: ch, prompt, env, t
   const board = boardPart(S, task)
   if (board) volatileParts.push(board)
   if (canAsk) volatileParts.push(askGuidance(S, task.id))
+  const refCtx = taskRefContext(S, task.id, prompt, canAsk)
+  if (refCtx) volatileParts.push(refCtx)
   const volatileTail = volatileParts.join('\n\n')
 
   let finalPrompt = prompt
@@ -1486,9 +1565,9 @@ async function runCli({ runId, task, session, agent, changes: ch, prompt, env, t
       onDelta: (s) => {
         roundText += s
         const safe = filter.push(s)
-        if (safe) { acc += safe; turnLog.text(safe); post2({ type: 'delta', text: safe }) }
+        if (safe) { acc += safe; turnLog.text(safe); stream.delta(safe) }
       },
-      onThinking: (t) => { think += t; turnLog.think(t); post2({ type: 'thinking', text: t }) },
+      onThinking: (t) => { think += t; turnLog.think(t); stream.thinking(t) },
       onStep: mergeStep,
       onPlan: (items) => {
         plan = items
@@ -1503,7 +1582,7 @@ async function runCli({ runId, task, session, agent, changes: ch, prompt, env, t
           cliUsage.cache_creation_input_tokens += Number(usage.cache_creation_input_tokens) || 0
         }
         const left = filter.flush()
-        if (left) { acc += left; turnLog.text(left); post2({ type: 'delta', text: left }) }
+        if (left) { acc += left; turnLog.text(left); stream.delta(left) }
         okv({ content: stripAskMarkers((result && result.trim()) ? result : roundText), roundText })
       },
       onError: (err) => fail(err),
@@ -1584,7 +1663,7 @@ async function runCli({ runId, task, session, agent, changes: ch, prompt, env, t
     })
     finishRun(runId, 'done', content, { input: inputTok, output: outputTok, cached: cachedTok })
     scheduleAfterTurn(task.id, session.id)
-    scheduleTurnDiff({ task, session, runId, env, turnStart })
+    scheduleTurnDiff({ task, session, runId, env, turnStartP })
   } catch (e) {
     post2({ type: 'done', error: e.message })
     try { S.updateRun(runId, { error: e.message, finished_at: new Date().toISOString() }) } catch {}
@@ -1659,13 +1738,18 @@ async function summarizeSession(taskId, sessionId) {
   return { ok: true, summary }
 }
 
+// 回合结束后的后台维护（摘要/简介/功能图）串行执行，且仅在无进行中回合时运行：
+// 这些任务常带 LLM 网络等待与文件扫描，若与下一轮的 collect/captureTurn 并发会挤满主线程导致卡顿。
+let maintainChain = Promise.resolve()
 function scheduleAfterTurn(taskId, sessionId) {
   setTimeout(() => {
-    ;(async () => {
+    maintainChain = maintainChain.then(async () => {
+      // 等当前没有正在进行的回合再跑，避免与用户紧接着的下一条消息抢主线程
+      while (runs.size > 0) await new Promise((r) => setTimeout(r, 1500))
       try { await maybeSummarize(taskId, sessionId) } catch {}
       try { await autoSyncTaskInfo(taskId) } catch {}
       try { await require('./featuremap').maintainVisible(taskId, sessionId) } catch {}
-    })()
+    }).catch(() => {})
   }, 800)
 }
 

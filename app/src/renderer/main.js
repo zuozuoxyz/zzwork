@@ -1,7 +1,7 @@
 // 渲染层入口：启动、数据装载、视图路由
 import { $, $$, refreshIcons } from './lib/ui.js'
 import { store, dialog, env as envApi, fsapi } from './lib/api.js'
-import { state, on, emit } from './lib/state.js'
+import { state, on, emit, activeTask } from './lib/state.js'
 import { loadBase, reloadSkills, scanAll } from './lib/data.js'
 import { initProjectsView, renderProjects } from './views/projects.js'
 import { initProjectFiles, renderProjectFiles } from './views/projectFiles.js'
@@ -16,7 +16,7 @@ import { renderTabs, showPane } from './workbench/tabs.js'
 import { renderInfo } from './workbench/info.js'
 import { renderSession, initSessionView } from './workbench/session.js'
 import { renderChat, refreshChatHeader, initChatView } from './workbench/chat.js'
-import { openFile, activate, closeFile, closeAllFiles, restoreForTask } from './workbench/editor.js'
+import { openFile, activate, closeFile, closeFiles, closeAllFiles, restoreForTask } from './workbench/editor.js'
 import { renderFileTree } from './workbench/fileTree.js'
 import { initTerminalView, attachTaskTerminal } from './workbench/terminal.js'
 import { initUpdate } from './update.js'
@@ -45,6 +45,21 @@ function cleanupCardChat() {
 }
 function cardById(id) {
   return state.boardCards.find((c) => c.id === id) || state.tasks.find((t) => t.id === id) || null
+}
+// 顶部居中标题随当前视图同步：卡片对话→卡片名，看板→看板，环境/Skill/模型/MCP 详情→条目名，任务→任务名
+function topTitleText() {
+  const inCard = (state.pane === 'card' || state.pane === 'file') && state.cardActive && (state.mode === 'card' || state.mode === 'board')
+  if (inCard) { const c = cardById(state.cardActive); if (c) return c.name || '未命名任务' }
+  if (state.pane === 'inbox') return '需求便签'
+  if (state.mode === 'settings' || state.pane === 'settings') return '设置'
+  if (state.mode === 'item') return (state.item && state.item.label) || '详情'
+  if (state.mode === 'board' || state.pane === 'board') return '看板'
+  if (state.taskId) { const t = activeTask(); return (t && t.name) || '未选择任务' }
+  return '未选择任务'
+}
+function syncTopTitle() {
+  const el = $('#stTask')
+  if (el) el.textContent = topTitleText()
 }
 // 终端跟随当前工作上下文：查看卡片对话或卡片工作目录文件时用卡片任务（cwd 即卡片目录），
 // 其余情况用当前任务。避免在看板任务上打开终端却落在上一个普通任务的目录里。
@@ -217,8 +232,7 @@ async function selectTask(id) {
     await renderSession(null)
     await renderChat(null)
     showPane('info')
-    const stTask = $('#stTask')
-    if (stTask) stTask.textContent = '未选择任务'
+    syncTopTitle()
     syncTerminal()
     await renderProjectFiles()
     return
@@ -345,6 +359,44 @@ function openSettings() {
   renderSettings()
 }
 
+// 侧栏与编辑区之间可拖动调整宽度（持久化到 settings，重启保留）
+const SIDE_MIN = 180
+async function initSideSplit() {
+  const split = $('#sideSplit')
+  const side = document.querySelector('#zzv .side')
+  if (!split || !side) return
+  let saved = 250
+  try { saved = parseInt(await store('settings.get', { key: 'ui:sideWidth', dflt: '250' }), 10) || 250 } catch {}
+  side.style.width = Math.max(SIDE_MIN, saved) + 'px'
+  let startX = 0, startW = 0, dragging = false
+  const onMove = (e) => {
+    if (!dragging) return
+    const max = Math.max(SIDE_MIN, window.innerWidth - 420)
+    const w = Math.max(SIDE_MIN, Math.min(max, startW + (e.clientX - startX)))
+    side.style.width = w + 'px'
+  }
+  const onUp = () => {
+    if (!dragging) return
+    dragging = false
+    split.classList.remove('dragging')
+    document.body.classList.remove('resizing-side')
+    window.removeEventListener('mousemove', onMove)
+    window.removeEventListener('mouseup', onUp)
+    const w = parseInt(side.style.width, 10) || 250
+    store('settings.set', { key: 'ui:sideWidth', value: String(w) }).catch(() => {})
+  }
+  split.addEventListener('mousedown', (e) => {
+    e.preventDefault()
+    dragging = true
+    startX = e.clientX
+    startW = side.getBoundingClientRect().width
+    split.classList.add('dragging')
+    document.body.classList.add('resizing-side')
+    window.addEventListener('mousemove', onMove)
+    window.addEventListener('mouseup', onUp)
+  })
+}
+
 function bindEvents() {
   $$('.abi[data-view]').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -386,14 +438,17 @@ function bindEvents() {
   on('tabs-changed', renderTabs)
   on('file-activate', (p) => { if (p) activate(p) })
   on('file-close', (p) => { if (p) closeFile(p) })
+  on('file-close-many', (paths) => { if (Array.isArray(paths) && paths.length) closeFiles(paths) })
   on('open-file', (p) => { if (p) openFile(p.path, p.name) })
   on('tasks-changed', async () => {
     renderProjects()
+    syncTopTitle()
     if (state.taskId) await renderInfo()
   })
   on('data-scanned', () => renderSidebars())
   on('task-updated', async (id) => {
     if (id && id !== state.taskId) return
+    syncTopTitle()
     if (state.taskId) {
       await renderChat(state.taskId)
       await renderInfo()
@@ -402,6 +457,8 @@ function bindEvents() {
   on('pane-changed', (name) => {
     // 编辑区在「看板」与「卡片对话」间切换时，左侧栏同步切回看板配置/工作目录树
     syncBoardSide()
+    // 顶部居中标题跟随当前视图
+    syncTopTitle()
     // 终端跟随当前工作上下文：卡片上下文用卡片目录，其余用当前任务
     syncTerminal()
     // 便签激活时隐藏左侧栏，编辑区更宽；标题栏入口同步高亮
@@ -460,6 +517,7 @@ async function boot() {
     initBoardView()
     initTerminalView()
     initUpdate()
+    await initSideSplit()
     bindEvents()
 
     try {

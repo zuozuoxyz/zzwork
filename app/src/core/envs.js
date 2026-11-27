@@ -200,12 +200,13 @@ async function listWslDistros() {
 }
 
 // ---------- 远程同步：skills（按需，把本机 ~/.zzwork/skills/<name> 拷到远端同名目录）----------
-function copyDirRecursive(src, dest) {
-  fs.mkdirSync(dest, { recursive: true })
-  for (const e of fs.readdirSync(src, { withFileTypes: true })) {
+// 异步递归拷贝：目标常是 \\wsl$ UNC，同步 fs 会阻塞主线程（回合内执行）
+async function copyDirRecursive(src, dest) {
+  await fs.promises.mkdir(dest, { recursive: true })
+  for (const e of await fs.promises.readdir(src, { withFileTypes: true })) {
     const s = path.join(src, e.name), d = path.join(dest, e.name)
-    if (e.isDirectory()) copyDirRecursive(s, d)
-    else fs.copyFileSync(s, d)
+    if (e.isDirectory()) await copyDirRecursive(s, d)
+    else await fs.promises.copyFile(s, d)
   }
 }
 
@@ -222,11 +223,11 @@ async function syncSkillsToEnv(env, skillDirs) {
       const m = home.match(/^\/(mnt\/[a-z])\/(.*)$/i) // Windows 下 home 通常是 /home/user
       const winHome = home.replace(/\//g, '\\')
       const unc = `\\\\wsl$\\${env.config.distro}${winHome}\\.zzwork\\skills`
-      fs.mkdirSync(unc, { recursive: true })
+      await fs.promises.mkdir(unc, { recursive: true })
       let n = 0
       for (const dir of skillDirs) {
         const name = path.basename(dir)
-        copyDirRecursive(dir, path.join(unc, name))
+        await copyDirRecursive(dir, path.join(unc, name))
         n++
       }
       return { ok: true, synced: n }

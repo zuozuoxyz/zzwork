@@ -4,6 +4,7 @@ import { state, emit } from '../lib/state.js'
 import { $, esc, ic, refreshIcons, basename, dirname } from '../lib/ui.js'
 import { reloadSkills, scanAll } from '../lib/data.js'
 import { toast } from '../components/toast.js'
+import { renderMarkdown, enhanceMarkdown, highlightIn, bindMarkdownClicks } from '../components/markdown.js'
 
 function sourceOf(path) {
   const p = String(path || '')
@@ -59,7 +60,7 @@ export async function renderSkillDetail(id) {
     <div class="box"><div class="l">来源目录</div><div class="h">自动扫描 .agents 与 .claude</div>
       <div class="frow"><div class="ftxt" style="max-width:120px">${esc(sourceOf(s.path))}</div><div class="ftxt">${esc(s.path)}</div></div></div>
     <div class="sec">内容预览</div>
-    <div class="code" id="skillPreview">加载中…</div>
+    <div class="box md" id="skillPreview">加载中…</div>
     <div class="frow" style="margin-top:12px">
       <button class="btn" id="openSkillFile">打开文件</button>
       ${state.taskId ? '<button class="btn pri" id="enableSkill">在会话中启用</button>' : ''}
@@ -70,7 +71,16 @@ export async function renderSkillDetail(id) {
   try {
     const text = await envApi('readSkill', { path: s.path })
     const pre = $('#skillPreview')
-    if (pre) pre.textContent = text || '（空文件）'
+    if (pre) {
+      if (text && text.trim()) {
+        pre.innerHTML = renderMarkdown(text)
+        enhanceMarkdown(pre, { root: dirname(s.path) })
+        highlightIn(pre)
+        bindMarkdownClicks(pre)
+      } else {
+        pre.textContent = '（空文件）'
+      }
+    }
   } catch (e) {
     const pre = $('#skillPreview')
     if (pre) pre.textContent = '读取失败：' + e.message

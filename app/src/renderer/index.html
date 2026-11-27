@@ -45,6 +45,7 @@
         <input id="cmdInput" placeholder="过滤任务、Skills、MCP、模型" autocomplete="off" spellcheck="false">
       </div>
       <div style="flex:1"></div>
+      <div class="title-task" id="stTask">未选择任务</div>
       <button class="ib upd" id="updateBtn" hidden title="发现新版本"><i data-lucide="circle-arrow-up" style="width:14px;height:14px"></i></button>
       <button class="ib ib-entry" id="openInboxBtn" title="需求便签 · 记录并归类需求"><i data-lucide="sticky-note" style="width:14px;height:14px"></i><span>需求便签</span><span class="ibbadge" id="openInboxBadge" hidden></span></button>
       <button class="ib" id="termToggle" title="终端 (Ctrl+`)"><i data-lucide="square-terminal" style="width:14px;height:14px"></i></button>
@@ -128,6 +129,8 @@
           </div>
         </div>
       </div>
+
+      <div class="sidesplit" id="sideSplit" title="拖动调整宽度"></div>
 
       <div class="ed">
         <div class="tabs" id="tabbar"></div>
@@ -255,7 +258,6 @@
     </div>
 
     <div class="st">
-      <span class="lf" id="stTask">未选择任务</span>
       <span class="s"></span>
       <span id="stRight"></span>
       <span id="stVersion">zzwork 0.6.6</span>

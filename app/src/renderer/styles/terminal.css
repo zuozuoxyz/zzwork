@@ -40,3 +40,18 @@
 #zzv .ed.term-max > .tabs, #zzv .ed.term-max > .pane { display: none !important }
 #zzv .ed.term-max > .term-panel { flex: 1 1 auto; height: auto !important }
 #zzv #termToggle.on { color: var(--brand) }
+
+/* 新建终端「批处理」悬停菜单 */
+#zzv .term-batchmenu { position: fixed; z-index: 120; display: none; min-width: 200px; max-width: 320px;
+  background: var(--card2); border: 1px solid var(--bd2); border-radius: 6px; padding: 4px;
+  box-shadow: 0 10px 26px rgba(0,0,0,.45) }
+#zzv .term-batchmenu.on { display: block }
+#zzv .term-batchmenu .tbm-item { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 9px;
+  color: var(--fg); font-size: 12px; border-radius: 4px; cursor: pointer }
+#zzv .term-batchmenu .tbm-item:hover { background: rgba(255,255,255,.08) }
+#zzv .term-batchmenu .tbm-item .nm { flex: 0 0 auto; max-width: 160px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap }
+#zzv .term-batchmenu .tbm-item .cmd { flex: 1 1 auto; min-width: 0; color: var(--faint); font-size: 10.5px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: Consolas, monospace }
+#zzv .term-batchmenu .tbm-sep { height: 1px; background: var(--bd2); margin: 4px 2px }
+#zzv .term-batchmenu .tbm-empty { padding: 8px 9px; color: var(--faint); font-size: 11px; line-height: 1.5 }

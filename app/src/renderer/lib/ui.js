@@ -15,7 +15,13 @@ export function ic(name, size = 14, color) {
 }
 
 export function refreshIcons() {
-  try { createIcons({ icons, attrs: { 'stroke-width': 1.8 } }) } catch {}
+  try {
+    createIcons({ icons, attrs: { 'stroke-width': 1.8 } })
+    // lucide 生成的 <svg> 仍会保留 data-lucide，导致下一次 createIcons 把全应用已渲染的图标
+    // 全部销毁重建（流式渲染每 ~90ms 调用一次时尤为致命）。剥离后，后续只处理新插入的
+    // <i data-lucide> 占位元素，避免反复全量重建造成主线程卡顿。
+    document.querySelectorAll('svg[data-lucide]').forEach((s) => s.removeAttribute('data-lucide'))
+  } catch {}
 }
 
 // 任务类型图标（与文件系统图标观感一致）：代码任务=folder-git(蓝)，通用任务=notebook(青)
